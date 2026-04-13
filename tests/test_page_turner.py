@@ -1,6 +1,6 @@
-"""Tests for the page-turner module (Quartz key-event injection).
+"""Tests for the page-turner module (osascript key-event injection).
 
-Quartz CGEvent calls are always injected so tests run without Accessibility
+osascript calls are always injected so tests run without Accessibility
 permission on any platform.
 """
 
@@ -10,8 +10,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from unittest.mock import patch
+
 from kindle_pdf_capture.page_turner import (
     AccessibilityError,
+    _default_event_fn,
+    _default_is_trusted,
     check_accessibility,
     focus_window,
     send_right_arrow,
@@ -108,3 +112,49 @@ class TestSendRightArrow:
 
     def test_does_not_raise_with_mock(self) -> None:
         send_right_arrow(event_fn=lambda et, kc: None)
+
+
+# ---------------------------------------------------------------------------
+# _default_is_trusted (osascript-based)
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultIsTrusted:
+    def test_returns_true_when_osascript_succeeds(self) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            assert _default_is_trusted() is True
+
+    def test_returns_false_when_osascript_fails(self) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            assert _default_is_trusted() is False
+
+    def test_returns_false_on_exception(self) -> None:
+        with patch("subprocess.run", side_effect=OSError):
+            assert _default_is_trusted() is False
+
+
+# ---------------------------------------------------------------------------
+# _default_event_fn (osascript-based)
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultEventFn:
+    def test_calls_osascript_with_key_code(self) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            _default_event_fn(10, 124)
+            assert mock_run.called
+            cmd = mock_run.call_args[0][0]
+            assert "osascript" in cmd
+            assert "124" in " ".join(cmd)
+
+    def test_does_not_raise_on_osascript_failure(self) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            _default_event_fn(10, 124)  # should not raise
+
+    def test_does_not_raise_on_exception(self) -> None:
+        with patch("subprocess.run", side_effect=OSError):
+            _default_event_fn(10, 124)  # should not raise
