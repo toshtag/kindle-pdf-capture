@@ -1,0 +1,81 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kindle-pdf-capture"
+version = "0.0.0"
+description = "Capture Kindle for Mac pages via screen recording and build a high-quality PDF (with optional OCR)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "tochi" }]
+keywords = ["kindle", "pdf", "macos", "ocr", "screenshot", "capture"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics :: Capture :: Screen Capture",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "click>=8.1.7",
+    "img2pdf>=0.5.1",
+    "numpy>=2.0",
+    "opencv-python>=4.10",
+    "pikepdf>=9.0",
+    "pillow>=11.0",
+    "pyobjc-framework-Quartz>=11.0 ; sys_platform == 'darwin'",
+    "rich>=14.0",
+]
+
+[project.optional-dependencies]
+ocr = [
+    "ocrmypdf>=16.0",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "pytest-mock>=3.14",
+    "ruff>=0.8",
+]
+
+[project.scripts]
+kpc = "kindle_pdf_capture.main:cli"
+
+[project.urls]
+Homepage = "https://github.com/tochi/kindle-pdf-capture"
+Issues = "https://github.com/tochi/kindle-pdf-capture/issues"
+Documentation = "https://github.com/tochi/kindle-pdf-capture#readme"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kindle_pdf_capture"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "SIM", # simplify
+    "RUF",
+]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B018"]
