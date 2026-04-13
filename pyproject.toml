@@ -31,7 +31,7 @@ dependencies = [
     "pikepdf>=9.0",
     "pillow>=11.0",
     "pyobjc-framework-Quartz>=11.0 ; sys_platform == 'darwin'",
-    "rich>=14.0",
+    "rich>=15.0.0",
 ]
 
 [project.optional-dependencies]
