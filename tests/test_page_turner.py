@@ -6,11 +6,9 @@ permission on any platform.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
-
-from unittest.mock import patch
 
 from kindle_pdf_capture.page_turner import (
     AccessibilityError,
