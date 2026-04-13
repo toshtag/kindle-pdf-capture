@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-04-13
+
 ### Added
 
 - `cropper`: content-region detection via OpenCV contour analysis
@@ -20,5 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `main`: Click CLI with all capture options (`kpc` entry point)
 - Full test suite (hermetic, no macOS permissions required)
 - Bilingual documentation (English and Japanese)
+- GitHub PR/issue templates, Dependabot, and security policy
 
-[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/HEAD...HEAD
+[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/toshtag/kindle-pdf-capture/releases/tag/v0.1.0
