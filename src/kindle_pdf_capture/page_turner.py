@@ -1,11 +1,11 @@
-"""Page-turn automation via osascript key-event injection.
+"""Page-turn automation via Quartz CGEventPostToPid.
 
-Sends a right-arrow key event to the frontmost Kindle window using
-System Events via osascript. This avoids per-binary Accessibility
-permission issues caused by virtual-environment Python interpreters.
+Sends a key event directly to the Kindle process by PID using
+CGEventPostToPid, which works regardless of which application currently
+has keyboard focus.  No window activation is needed before each key press.
 
-Requires macOS Accessibility permission granted to Terminal (or
-whichever application runs kpc) — not to the Python binary itself.
+Requires macOS Accessibility permission granted to Terminal (or whichever
+application runs kpc).
 """
 
 from __future__ import annotations
@@ -19,8 +19,9 @@ from kindle_pdf_capture.window_capture import KindleWindow
 
 logger = logging.getLogger(__name__)
 
-# macOS virtual key code for the right-arrow key
-_KEY_RIGHT = 124
+# macOS virtual key codes
+KEY_LEFT: int = 123   # left-arrow  — next page in RTL (e.g. Japanese) books
+KEY_RIGHT: int = 124  # right-arrow — next page in LTR (e.g. English) books
 
 
 class AccessibilityError(PermissionError):
@@ -28,27 +29,17 @@ class AccessibilityError(PermissionError):
 
 
 # ---------------------------------------------------------------------------
-# Default osascript implementations
+# Accessibility probe (osascript)
 # ---------------------------------------------------------------------------
 
-# AppleScript snippets used to focus the Kindle process and send a key code.
-# Two separate -e fragments are passed to osascript so the key always reaches
-# Kindle regardless of which application currently has focus.
-_APPLESCRIPT_FOCUS_KINDLE = (
-    'tell application "System Events" to set frontmost of process "Kindle" to true'
-)
-_APPLESCRIPT_KEY_CODE = 'tell application "System Events" to key code {key_code}'
-
-# Minimal AppleScript used to probe Accessibility permission without
-# triggering a permission dialog or side effects.
 _APPLESCRIPT_PROBE = 'tell application "System Events" to get name of first process'
 
 
 def _default_is_trusted() -> bool:
     """Return True when the process has Accessibility permission.
 
-    Uses a lightweight osascript probe so the permission check targets
-    the terminal application rather than the Python interpreter binary.
+    Uses a lightweight osascript probe so the check targets the terminal
+    application rather than the Python interpreter binary.
     """
     try:
         result = subprocess.run(
@@ -61,6 +52,11 @@ def _default_is_trusted() -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Window activation (used for initial focus only, not per-keypress)
+# ---------------------------------------------------------------------------
+
+
 def _default_activate(pid: int) -> None:
     """Bring the process with *pid* to the foreground via AppKit."""
     try:
@@ -68,7 +64,6 @@ def _default_activate(pid: int) -> None:
 
         apps = NSRunningApplication.runningApplicationsWithBundleIdentifier_("com.amazon.Kindle")
         if not apps:
-            # Fallback: find by pid
             app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
             if app:
                 app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
@@ -78,31 +73,34 @@ def _default_activate(pid: int) -> None:
         logger.warning("Could not activate Kindle window: %s", exc)
 
 
-def _default_event_fn(event_type: int, key_code: int) -> None:
-    """Post a key event via osascript System Events.
+# ---------------------------------------------------------------------------
+# Key-event delivery via CGEventPostToPid
+# ---------------------------------------------------------------------------
 
-    Only key-down events (event_type == 10) trigger the osascript call;
-    key-up is a no-op because System Events key code sends a full
-    press-and-release in a single call.
+# Import at module scope so tests can patch them without entering the function.
+try:
+    from Quartz import CGEventCreateKeyboardEvent, CGEventPostToPid
+except Exception:  # pragma: no cover — unavailable outside macOS
+    CGEventCreateKeyboardEvent = None  # type: ignore[assignment]
+    CGEventPostToPid = None  # type: ignore[assignment]
 
-    Kindle is brought to the foreground immediately before the key is sent
-    so the event reaches Kindle even when the terminal that runs kpc has
-    keyboard focus.
+
+def _default_send_key(key_code: int, pid: int) -> None:
+    """Post a key-down + key-up event to *pid* via CGEventPostToPid.
+
+    CGEventPostToPid delivers events directly to the target process without
+    requiring it to be in the foreground.  This is the only reliable method
+    for background key delivery on macOS.
     """
-    _KEY_DOWN = 10
-    if event_type != _KEY_DOWN:
-        return
     try:
-        key_script = _APPLESCRIPT_KEY_CODE.format(key_code=key_code)
-        result = subprocess.run(
-            ["osascript", "-e", _APPLESCRIPT_FOCUS_KINDLE, "-e", key_script],
-            capture_output=True,
-            timeout=3,
-        )
-        if result.returncode != 0:
-            logger.error("osascript key event failed: %s", result.stderr.decode())
+        ev_down = CGEventCreateKeyboardEvent(None, key_code, True)
+        CGEventPostToPid(pid, ev_down)
+        time.sleep(0.05)
+        ev_up = CGEventCreateKeyboardEvent(None, key_code, False)
+        CGEventPostToPid(pid, ev_up)
+        logger.debug("Sent key code %d to pid %d", key_code, pid)
     except Exception as exc:
-        logger.error("Failed to post key event via osascript: %s", exc)
+        logger.error("CGEventPostToPid failed (key=%d pid=%d): %s", key_code, pid, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +130,7 @@ def focus_window(
     *,
     activate_fn: Callable[[int], None] = _default_activate,
 ) -> None:
-    """Bring *window* to the foreground so it receives key events.
+    """Bring *window* to the foreground (used once at startup).
 
     Args:
         window: The KindleWindow to focus.
@@ -142,25 +140,22 @@ def focus_window(
     activate_fn(window.pid)
 
 
-def send_right_arrow(
+def send_page_turn_key(
+    pid: int,
+    key_code: int,
     *,
-    event_fn: Callable[[int, int], None] = _default_event_fn,
-    inter_event_delay: float = 0.05,
+    send_fn: Callable[[int, int], None] = _default_send_key,
 ) -> None:
-    """Send a right-arrow key-down + key-up event pair.
+    """Send a page-turn key event to the Kindle process.
+
+    Uses CGEventPostToPid by default, which works even when Kindle is in the
+    background.  No window focus change is needed.
 
     Args:
-        event_fn: Injectable; receives (event_type_int, key_code).
-            The integer values follow Quartz kCGEventKeyDown / kCGEventKeyUp.
-        inter_event_delay: Seconds between key-down and key-up (default 50ms).
+        pid: PID of the Kindle process.
+        key_code: Key to send — use KEY_LEFT (123) for RTL books or
+            KEY_RIGHT (124) for LTR books.
+        send_fn: Injectable; receives (key_code, pid).  Replace in tests to
+            avoid real Quartz calls.
     """
-    # Use literal integers that match Quartz constants to avoid importing
-    # Quartz here (keeps the function testable without macOS libs).
-    KEY_DOWN = 10  # kCGEventKeyDown
-    KEY_UP = 11  # kCGEventKeyUp
-
-    event_fn(KEY_DOWN, _KEY_RIGHT)
-    if inter_event_delay > 0:
-        time.sleep(inter_event_delay)
-    event_fn(KEY_UP, _KEY_RIGHT)
-    logger.debug("Sent right-arrow key event")
+    send_fn(key_code, pid)

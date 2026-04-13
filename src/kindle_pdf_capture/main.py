@@ -29,10 +29,12 @@ from kindle_pdf_capture.orchestrator import (
     save_session,
 )
 from kindle_pdf_capture.page_turner import (
+    KEY_LEFT,
+    KEY_RIGHT,
     AccessibilityError,
     check_accessibility,
     focus_window,
-    send_right_arrow,
+    send_page_turn_key,
 )
 from kindle_pdf_capture.pdf_builder import build_pdf, optimise_pdf
 from kindle_pdf_capture.render_wait import WaitStatus, wait_for_render
@@ -59,7 +61,12 @@ def _setup_logging(debug: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _run_capture(config: CaptureConfig, *, pages_to_retry: list[int]) -> None:
+def _run_capture(
+    config: CaptureConfig,
+    *,
+    pages_to_retry: list[int],
+    key_code: int,
+) -> None:
     """Inner capture loop; separated for testability."""
     config.ensure_dirs()
 
@@ -120,7 +127,7 @@ def _run_capture(config: CaptureConfig, *, pages_to_retry: list[int]) -> None:
         log.debug("Page %d saved to %s", page_num, cropped_path)
 
         # Turn to next page, then wait for the new page to render
-        send_right_arrow()
+        send_page_turn_key(window.pid, key_code)
         wait_result = wait_for_render(
             capture_fn=lambda: capture_window(window),
         )
@@ -201,6 +208,17 @@ def _run_capture(config: CaptureConfig, *, pages_to_retry: list[int]) -> None:
     help="Seconds to wait before capture begins (use to switch to Kindle).",
 )
 @click.option(
+    "--direction",
+    type=click.Choice(["left", "right"], case_sensitive=False),
+    default="right",
+    show_default=True,
+    help=(
+        "Page-advance direction. "
+        "Use 'right' for LTR books (English etc.) and "
+        "'left' for RTL books (Japanese manga etc.)."
+    ),
+)
+@click.option(
     "--ocr",
     is_flag=True,
     default=False,
@@ -237,6 +255,7 @@ def cli(
     jpeg_quality: int,
     save_raw: bool,
     start_delay: int,
+    direction: str,
     ocr: bool,
     ocr_lang: str,
     ocr_optimize: int,
@@ -246,6 +265,8 @@ def cli(
     """Capture Kindle for Mac pages and assemble them into a PDF."""
     _setup_logging(debug)
     log = logging.getLogger(__name__)
+
+    key_code = KEY_LEFT if direction == "left" else KEY_RIGHT
 
     config = CaptureConfig(
         out_dir=out,
@@ -268,7 +289,7 @@ def cli(
             log.info("No failed pages found; capturing from the beginning.")
 
     try:
-        _run_capture(config, pages_to_retry=pages_to_retry)
+        _run_capture(config, pages_to_retry=pages_to_retry, key_code=key_code)
     except (AccessibilityError, WindowCaptureError) as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}")
         log.debug("Fatal error", exc_info=True)
