@@ -136,9 +136,7 @@ class TestCliKindleNotRunning:
                 side_effect=WindowCaptureError("Kindle is not running"),
             ),
         ):
-            result = runner.invoke(
-                cli, ["--out", str(tmp_path / "out"), "--start-delay", "0"]
-            )
+            result = runner.invoke(cli, ["--out", str(tmp_path / "out"), "--start-delay", "0"])
         assert result.exit_code != 0
 
     def test_error_message_shown(self, tmp_path: Path) -> None:
@@ -153,9 +151,7 @@ class TestCliKindleNotRunning:
                 side_effect=WindowCaptureError("Kindle is not running"),
             ),
         ):
-            result = runner.invoke(
-                cli, ["--out", str(tmp_path / "out"), "--start-delay", "0"]
-            )
+            result = runner.invoke(cli, ["--out", str(tmp_path / "out"), "--start-delay", "0"])
         assert "Kindle" in result.output or "Error" in result.output
 
 
@@ -174,9 +170,7 @@ class TestCliAccessibilityDenied:
             "kindle_pdf_capture.main.check_accessibility",
             side_effect=AccessibilityError("No permission"),
         ):
-            result = runner.invoke(
-                cli, ["--out", str(tmp_path / "out"), "--start-delay", "0"]
-            )
+            result = runner.invoke(cli, ["--out", str(tmp_path / "out"), "--start-delay", "0"])
         assert result.exit_code != 0
 
 
@@ -257,9 +251,7 @@ class TestCliOcr:
                 status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2
             )
             mock_detect.return_value = ContentRegion(x=50, y=50, w=1100, h=800)
-            mock_ocr.return_value = OcrResult(
-                status=OcrStatus.SUCCESS, output="", returncode=0
-            )
+            mock_ocr.return_value = OcrResult(status=OcrStatus.SUCCESS, output="", returncode=0)
 
             result = runner.invoke(
                 cli,
