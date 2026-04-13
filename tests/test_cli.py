@@ -74,7 +74,7 @@ class TestCliHappyPath:
             patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
             patch("kindle_pdf_capture.main.focus_window"),
             patch("kindle_pdf_capture.main.capture_window", return_value=frame),
-            patch("kindle_pdf_capture.main.send_right_arrow"),
+            patch("kindle_pdf_capture.main.send_page_turn_key"),
             patch(
                 "kindle_pdf_capture.main.wait_for_render",
                 return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
@@ -197,7 +197,7 @@ class TestCliRetryFailed:
             patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
             patch("kindle_pdf_capture.main.focus_window"),
             patch("kindle_pdf_capture.main.capture_window", return_value=frame),
-            patch("kindle_pdf_capture.main.send_right_arrow"),
+            patch("kindle_pdf_capture.main.send_page_turn_key"),
             patch(
                 "kindle_pdf_capture.main.wait_for_render",
                 return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
@@ -228,16 +228,16 @@ class TestCliRetryFailed:
 
 
 # ---------------------------------------------------------------------------
-# Page-turn order: send_right_arrow must be called BEFORE wait_for_render
+# Page-turn order: send_page_turn_key must be called BEFORE wait_for_render
 # ---------------------------------------------------------------------------
 
 
 class TestPageTurnOrder:
-    def test_send_right_arrow_called_before_wait_for_render(self, tmp_path: Path) -> None:
+    def test_send_page_turn_key_called_before_wait_for_render(self, tmp_path: Path) -> None:
         """After capturing a page, the key event must be sent first, then
         wait_for_render polls until the *new* page has settled.
 
-        The wrong order (wait_for_render → capture → send_right_arrow) causes
+        The wrong order (wait_for_render → capture → send_page_turn_key) causes
         the render-wait to converge immediately on the already-stable page,
         so every capture ends up being the same page.
         """
@@ -251,7 +251,7 @@ class TestPageTurnOrder:
         from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
 
         def _record_arrow(*_a, **_kw) -> None:
-            call_order.append("send_right_arrow")
+            call_order.append("send_page_turn_key")
 
         def _record_wait(*_a, **_kw) -> WaitResult:
             call_order.append("wait_for_render")
@@ -262,7 +262,7 @@ class TestPageTurnOrder:
             patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
             patch("kindle_pdf_capture.main.focus_window"),
             patch("kindle_pdf_capture.main.capture_window", return_value=frame),
-            patch("kindle_pdf_capture.main.send_right_arrow", side_effect=_record_arrow),
+            patch("kindle_pdf_capture.main.send_page_turn_key", side_effect=_record_arrow),
             patch("kindle_pdf_capture.main.wait_for_render", side_effect=_record_wait),
             patch(
                 "kindle_pdf_capture.main.detect_content_region",
@@ -280,13 +280,13 @@ class TestPageTurnOrder:
             )
 
         assert result.exit_code == 0, result.output
-        # send_right_arrow must appear before wait_for_render in the call sequence
-        assert "send_right_arrow" in call_order
+        # send_page_turn_key must appear before wait_for_render in the call sequence
+        assert "send_page_turn_key" in call_order
         assert "wait_for_render" in call_order
-        arrow_idx = call_order.index("send_right_arrow")
+        arrow_idx = call_order.index("send_page_turn_key")
         wait_idx = call_order.index("wait_for_render")
         assert arrow_idx < wait_idx, (
-            f"Expected send_right_arrow (pos {arrow_idx}) before "
+            f"Expected send_page_turn_key (pos {arrow_idx}) before "
             f"wait_for_render (pos {wait_idx}), got: {call_order}"
         )
 
@@ -320,7 +320,7 @@ class TestCliOcr:
             patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
             patch("kindle_pdf_capture.main.focus_window"),
             patch("kindle_pdf_capture.main.capture_window", return_value=frame),
-            patch("kindle_pdf_capture.main.send_right_arrow"),
+            patch("kindle_pdf_capture.main.send_page_turn_key"),
             patch(
                 "kindle_pdf_capture.main.wait_for_render",
                 return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
@@ -353,3 +353,110 @@ class TestCliOcr:
             )
         assert result.exit_code == 0, result.output
         mock_ocr.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# --direction option
+# ---------------------------------------------------------------------------
+
+
+def _run_with_direction(tmp_path: Path, direction: str) -> tuple[object, list]:
+    """Helper: run kpc with --direction and return (result, captured key_codes)."""
+    runner = CliRunner()
+    window = _make_window()
+    frame = _content_bgr()
+    key_codes_used: list[int] = []
+
+    from kindle_pdf_capture.cropper import ContentRegion
+    from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
+
+    def _capture_key(*args, **kwargs) -> None:
+        # send_page_turn_key(pid, key_code, ...) — positional args
+        if len(args) >= 2:
+            key_codes_used.append(args[1])
+
+    with (
+        patch("kindle_pdf_capture.main.check_accessibility"),
+        patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
+        patch("kindle_pdf_capture.main.focus_window"),
+        patch("kindle_pdf_capture.main.capture_window", return_value=frame),
+        patch("kindle_pdf_capture.main.send_page_turn_key", side_effect=_capture_key),
+        patch(
+            "kindle_pdf_capture.main.wait_for_render",
+            return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
+        ),
+        patch(
+            "kindle_pdf_capture.main.detect_content_region",
+            return_value=ContentRegion(x=50, y=50, w=1100, h=800),
+        ),
+        patch("kindle_pdf_capture.main.normalize_image", return_value=frame),
+        patch("kindle_pdf_capture.main.save_jpeg"),
+        patch("kindle_pdf_capture.main.build_pdf"),
+        patch("kindle_pdf_capture.main.optimise_pdf"),
+        patch("kindle_pdf_capture.main.time.sleep"),
+    ):
+        result = runner.invoke(
+            cli,
+            [
+                "--out", str(tmp_path / "out"),
+                "--start-delay", "0",
+                "--max-pages", "1",
+                "--direction", direction,
+            ],
+        )
+    return result, key_codes_used
+
+
+class TestCliDirection:
+    def test_direction_right_uses_key_124(self, tmp_path: Path) -> None:
+        """--direction right must send right-arrow (key code 124)."""
+        result, codes = _run_with_direction(tmp_path, "right")
+        assert result.exit_code == 0, result.output
+        assert codes == [124], f"Expected [124] for --direction right, got {codes}"
+
+    def test_direction_left_uses_key_123(self, tmp_path: Path) -> None:
+        """--direction left must send left-arrow (key code 123) for RTL books."""
+        result, codes = _run_with_direction(tmp_path, "left")
+        assert result.exit_code == 0, result.output
+        assert codes == [123], f"Expected [123] for --direction left, got {codes}"
+
+    def test_default_direction_is_right(self, tmp_path: Path) -> None:
+        """Omitting --direction must default to right-arrow (key code 124)."""
+        runner = CliRunner()
+        window = _make_window()
+        frame = _content_bgr()
+        key_codes_used: list[int] = []
+
+        from kindle_pdf_capture.cropper import ContentRegion
+        from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
+
+        def _capture_key(*args, **kwargs) -> None:
+            if len(args) >= 2:
+                key_codes_used.append(args[1])
+
+        with (
+            patch("kindle_pdf_capture.main.check_accessibility"),
+            patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
+            patch("kindle_pdf_capture.main.focus_window"),
+            patch("kindle_pdf_capture.main.capture_window", return_value=frame),
+            patch("kindle_pdf_capture.main.send_page_turn_key", side_effect=_capture_key),
+            patch(
+                "kindle_pdf_capture.main.wait_for_render",
+                return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
+            ),
+            patch(
+                "kindle_pdf_capture.main.detect_content_region",
+                return_value=ContentRegion(x=50, y=50, w=1100, h=800),
+            ),
+            patch("kindle_pdf_capture.main.normalize_image", return_value=frame),
+            patch("kindle_pdf_capture.main.save_jpeg"),
+            patch("kindle_pdf_capture.main.build_pdf"),
+            patch("kindle_pdf_capture.main.optimise_pdf"),
+            patch("kindle_pdf_capture.main.time.sleep"),
+        ):
+            result = runner.invoke(
+                cli,
+                ["--out", str(tmp_path / "out"), "--start-delay", "0", "--max-pages", "1"],
+            )
+        assert result.exit_code == 0, result.output
+        assert key_codes_used == [124], f"Default should be right (124), got {key_codes_used}"
