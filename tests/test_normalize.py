@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 
 import numpy as np
-import pytest
 from PIL import Image
 
 from kindle_pdf_capture.normalize import (
@@ -14,7 +13,6 @@ from kindle_pdf_capture.normalize import (
     sharpen,
     whiten_background,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
