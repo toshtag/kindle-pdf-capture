@@ -8,10 +8,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from kindle_pdf_capture.orchestrator import (
     CaptureConfig,
@@ -21,7 +19,6 @@ from kindle_pdf_capture.orchestrator import (
     load_session,
     save_session,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
