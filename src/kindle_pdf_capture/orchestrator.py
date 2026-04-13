@@ -108,9 +108,6 @@ class CaptureSession:
 
     def record_result(self, result: PageResult) -> None:
         self._results.append(result)
-        # A successfully captured new page resets the duplicate streak
-        if result.status == PageStatus.OK:
-            self._duplicate_streak = 0
 
     def record_duplicate(self, frame: np.ndarray) -> None:
         """Call when the page has not changed after a page-turn attempt."""

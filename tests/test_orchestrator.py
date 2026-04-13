@@ -31,7 +31,7 @@ def _white_bgr(w: int = 1200, h: int = 900) -> np.ndarray:
 
 def _content_bgr() -> np.ndarray:
     img = _white_bgr()
-    img[200:700:20, 100:1100] = 30  # text-like lines
+    img[200:700, 100:1100] = 30  # solid dark region — distinct from white at any downscale
     return img
 
 
