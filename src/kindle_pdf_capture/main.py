@@ -94,13 +94,6 @@ def _run_capture(config: CaptureConfig, *, pages_to_retry: list[int]) -> None:
 
         log.info("Capturing page %d …", page_num)
 
-        # Capture and wait for render to settle
-        wait_result = wait_for_render(
-            capture_fn=lambda: capture_window(window),
-        )
-        if wait_result.status == WaitStatus.TIMEOUT:
-            log.warning("Page %d: render timed out after %.1fs", page_num, wait_result.elapsed)
-
         frame = capture_window(window)
 
         # Save raw if requested
@@ -126,11 +119,15 @@ def _run_capture(config: CaptureConfig, *, pages_to_retry: list[int]) -> None:
         )
         log.debug("Page %d saved to %s", page_num, cropped_path)
 
-        # Turn to next page
+        # Turn to next page, then wait for the new page to render
         send_right_arrow()
+        wait_result = wait_for_render(
+            capture_fn=lambda: capture_window(window),
+        )
+        if wait_result.status == WaitStatus.TIMEOUT:
+            log.warning("Page %d: render timed out after %.1fs", page_num, wait_result.elapsed)
 
         # Check for duplicate (end-of-book detection)
-        time.sleep(0.3)
         next_frame = capture_window(window)
         session.record_duplicate(next_frame)
 
