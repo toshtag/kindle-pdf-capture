@@ -15,6 +15,7 @@ from PIL import Image
 from kindle_pdf_capture.cropper import (
     ContentRegion,
     CropError,
+    _find_header_bottom,
     detect_content_region,
     fallback_crop,
 )
@@ -269,3 +270,123 @@ class TestFallbackCrop:
         assert region.y == 0
         assert region.w == 1200
         assert region.h == 900
+
+
+# ---------------------------------------------------------------------------
+# Helpers: synthetic Kindle window images with chrome
+# ---------------------------------------------------------------------------
+
+
+def _make_kindle_window_with_header(
+    width: int = 1200,
+    height: int = 900,
+    title_bar_height: int = 56,
+    header_height: int = 40,
+    divider_thickness: int = 2,
+) -> tuple[np.ndarray, int]:
+    """Build a synthetic Kindle window with macOS title bar and Kindle header.
+
+    Returns (bgr_image, expected_content_start_y).
+    The layout from top to bottom:
+      1. macOS title bar (gray)
+      2. Kindle header area (light gray, simulates book title text)
+      3. Horizontal divider line (dark, full width)
+      4. White content area with simulated text
+    """
+    img = np.full((height, width, 3), 255, dtype=np.uint8)
+
+    # macOS title bar: dark gray
+    img[:title_bar_height, :] = 80
+
+    # Kindle header: light gray with some "text" (darker pixels)
+    header_top = title_bar_height
+    header_bottom = header_top + header_height
+    img[header_top:header_bottom, :] = 230
+    # Simulate book title text in the center of the header
+    text_y = header_top + 10
+    img[text_y : text_y + 14, width // 4 : 3 * width // 4] = 60
+
+    # Horizontal divider line (dark, spanning full width)
+    divider_y = header_bottom
+    img[divider_y : divider_y + divider_thickness, :] = 30
+
+    content_start = divider_y + divider_thickness
+
+    # Content area: white with text blocks
+    img = _draw_text_block(
+        img, x=80, y=content_start + 20, w=width - 160, h=height - content_start - 60
+    )
+
+    return img, content_start
+
+
+# ---------------------------------------------------------------------------
+# _find_header_bottom
+# ---------------------------------------------------------------------------
+
+
+class TestFindHeaderBottom:
+    def test_detects_divider_line(self) -> None:
+        """Should detect the horizontal divider line and return its bottom y."""
+        img, expected_y = _make_kindle_window_with_header()
+        result = _find_header_bottom(img)
+        # Allow small tolerance (a few pixels)
+        assert abs(result - expected_y) <= 5
+
+    def test_returns_zero_for_no_header(self) -> None:
+        """An image with no header/divider should return 0."""
+        img = _make_white_canvas(1200, 900)
+        img = _draw_text_block(img, x=80, y=40, w=1040, h=820)
+        result = _find_header_bottom(img)
+        assert result == 0
+
+    def test_returns_zero_for_black_bordered_kindle(self) -> None:
+        """Kindle dark-mode layout (black border, white page) has no header divider."""
+        img = np.zeros((900, 1200, 3), dtype=np.uint8)
+        img[90:810, 180:1020] = 240
+        result = _find_header_bottom(img)
+        assert result == 0
+
+    def test_thick_divider(self) -> None:
+        """Should work with a thicker divider line (e.g. 4px)."""
+        img, expected_y = _make_kindle_window_with_header(divider_thickness=4)
+        result = _find_header_bottom(img)
+        assert abs(result - expected_y) <= 6
+
+    def test_different_window_sizes(self) -> None:
+        """Should work regardless of window dimensions."""
+        for w, h in [(800, 600), (1600, 1200), (2560, 1600)]:
+            img, expected_y = _make_kindle_window_with_header(width=w, height=h)
+            result = _find_header_bottom(img)
+            assert abs(result - expected_y) <= 5, (
+                f"Failed for {w}x{h}: got {result}, expected ~{expected_y}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# detect_content_region: header stripping integration
+# ---------------------------------------------------------------------------
+
+
+class TestDetectContentRegionWithHeader:
+    def test_excludes_title_bar_and_header(self) -> None:
+        """detect_content_region should exclude macOS title bar and Kindle header."""
+        img, content_start = _make_kindle_window_with_header()
+        region = detect_content_region(img)
+
+        # The detected region's top should be at or below the content start
+        assert region.y >= content_start - 5
+
+    def test_content_region_does_not_include_title_bar(self) -> None:
+        """The detected region must not start in the title bar area (y < 56)."""
+        img, _ = _make_kindle_window_with_header(title_bar_height=56)
+        region = detect_content_region(img)
+        assert region.y >= 50  # Should be well below the title bar
+
+    def test_still_works_without_header(self) -> None:
+        """Regular images (no header) should still work as before."""
+        img = _make_white_canvas(1200, 900)
+        img = _draw_text_block(img, x=100, y=80, w=1000, h=740)
+        region = detect_content_region(img)
+        assert region.y <= 100
+        assert region.area >= 1200 * 900 * 0.20

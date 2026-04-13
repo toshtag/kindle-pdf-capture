@@ -48,6 +48,18 @@ class CropError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
+def _find_header_bottom(bgr: np.ndarray, *, search_fraction: float = 0.25) -> int:
+    """Return the y-coordinate just below the Kindle header divider line.
+
+    Scans the top *search_fraction* of the image for a prominent horizontal
+    line (the divider between Kindle chrome and book content).
+
+    Returns 0 if no header is detected.
+    """
+    # TODO: implement header detection
+    return 0
+
+
 def _clamp_region(
     x: int, y: int, w: int, h: int, w_img: int, h_img: int, margin: int
 ) -> ContentRegion:
