@@ -9,10 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from kindle_pdf_capture.ocr import OcrResult, OcrStatus, run_ocr
-
 
 # ---------------------------------------------------------------------------
 # OcrResult / OcrStatus
@@ -119,7 +116,6 @@ class TestRunOcrFailure:
 
     def test_does_not_raise_on_subprocess_error(self, tmp_path: Path) -> None:
         """Even if subprocess raises, run_ocr must return a result, not propagate."""
-        import subprocess
 
         src = tmp_path / "book.pdf"
         dst = tmp_path / "book_ocr.pdf"
