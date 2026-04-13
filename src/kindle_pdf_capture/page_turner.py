@@ -1,15 +1,17 @@
-"""Page-turn automation via Quartz Event Services.
+"""Page-turn automation via osascript key-event injection.
 
-Sends a right-arrow key event to the frontmost Kindle window.
-All Quartz calls are abstracted behind injectable callables.
+Sends a right-arrow key event to the frontmost Kindle window using
+System Events via osascript. This avoids per-binary Accessibility
+permission issues caused by virtual-environment Python interpreters.
 
-Requires macOS Accessibility permission (System Preferences →
-Privacy & Security → Accessibility → grant Terminal / your app).
+Requires macOS Accessibility permission granted to Terminal (or
+whichever application runs kpc) — not to the Python binary itself.
 """
 
 from __future__ import annotations
 
 import logging
+import subprocess
 import time
 from collections.abc import Callable
 
@@ -26,16 +28,31 @@ class AccessibilityError(PermissionError):
 
 
 # ---------------------------------------------------------------------------
-# Default Quartz implementations
+# Default osascript implementations
 # ---------------------------------------------------------------------------
+
+# AppleScript snippet that sends a single key code via System Events.
+# key code 124 = right-arrow.
+_APPLESCRIPT_KEY_CODE = 'tell application "System Events" to key code {key_code}'
+
+# Minimal AppleScript used to probe Accessibility permission without
+# triggering a permission dialog or side effects.
+_APPLESCRIPT_PROBE = 'tell application "System Events" to get name of first process'
 
 
 def _default_is_trusted() -> bool:
-    """Return True when the process has Accessibility permission."""
-    try:
-        from Quartz import AXIsProcessTrusted
+    """Return True when the process has Accessibility permission.
 
-        return bool(AXIsProcessTrusted())
+    Uses a lightweight osascript probe so the permission check targets
+    the terminal application rather than the Python interpreter binary.
+    """
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", _APPLESCRIPT_PROBE],
+            capture_output=True,
+            timeout=3,
+        )
+        return result.returncode == 0
     except Exception:
         return False
 
@@ -58,20 +75,26 @@ def _default_activate(pid: int) -> None:
 
 
 def _default_event_fn(event_type: int, key_code: int) -> None:
-    """Post a CGEvent keyboard event."""
-    try:
-        from Quartz import (
-            CGEventCreateKeyboardEvent,
-            CGEventPost,
-            kCGEventKeyDown,
-            kCGHIDEventTap,
-        )
+    """Post a key event via osascript System Events.
 
-        is_down = event_type == kCGEventKeyDown
-        event = CGEventCreateKeyboardEvent(None, key_code, is_down)
-        CGEventPost(kCGHIDEventTap, event)
+    Only key-down events (event_type == 10) trigger the osascript call;
+    key-up is a no-op because System Events key code sends a full
+    press-and-release in a single call.
+    """
+    _KEY_DOWN = 10
+    if event_type != _KEY_DOWN:
+        return
+    try:
+        script = _APPLESCRIPT_KEY_CODE.format(key_code=key_code)
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            timeout=3,
+        )
+        if result.returncode != 0:
+            logger.error("osascript key event failed: %s", result.stderr.decode())
     except Exception as exc:
-        logger.error("Failed to post key event: %s", exc)
+        logger.error("Failed to post key event via osascript: %s", exc)
 
 
 # ---------------------------------------------------------------------------
