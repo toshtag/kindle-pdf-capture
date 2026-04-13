@@ -6,14 +6,14 @@ Accessibility permission on any platform.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from kindle_pdf_capture.page_turner import (
-    AccessibilityError,
     KEY_LEFT,
     KEY_RIGHT,
+    AccessibilityError,
     _default_is_trusted,
     check_accessibility,
     focus_window,
@@ -127,7 +127,7 @@ class TestDefaultSendKey:
 
         mock_event = MagicMock()
         with (
-            patch("kindle_pdf_capture.page_turner.CGEventCreateKeyboardEvent", return_value=mock_event) as mock_create,
+            patch("kindle_pdf_capture.page_turner.CGEventCreateKeyboardEvent", return_value=mock_event),
             patch("kindle_pdf_capture.page_turner.CGEventPostToPid") as mock_post,
         ):
             _default_send_key(KEY_LEFT, 1234)
