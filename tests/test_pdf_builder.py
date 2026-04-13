@@ -55,8 +55,14 @@ class TestBuildPdf:
         with pikepdf.open(out) as pdf:
             assert len(pdf.pages) == n
 
-    def test_page_dimensions_match_image(self, tmp_path: Path) -> None:
-        """PDF page size should match the JPEG pixel dimensions."""
+    def test_page_aspect_ratio_matches_image(self, tmp_path: Path) -> None:
+        """PDF page aspect ratio should match the source JPEG dimensions.
+
+        img2pdf converts px -> pt using the image's embedded DPI (or 96 DPI
+        when no DPI metadata is present): pt = px * 72 / dpi.  We verify the
+        aspect ratio rather than absolute point values so the test is robust
+        to any default DPI assumption.
+        """
         import pikepdf
 
         jpeg = _make_jpeg(tmp_path, "p.jpg", width=600, height=400)
@@ -65,12 +71,10 @@ class TestBuildPdf:
         with pikepdf.open(out) as pdf:
             page = pdf.pages[0]
             mb = page.mediabox
-            # img2pdf embeds at 72 DPI by default: points = pixels * 72/72 = pixels
-            # Tolerance of 2pt to account for rounding
             w_pt = float(mb[2])
             h_pt = float(mb[3])
-            assert abs(w_pt - 600) <= 2
-            assert abs(h_pt - 400) <= 2
+            # Expected aspect ratio: 600/400 = 1.5
+            assert abs(w_pt / h_pt - 600 / 400) < 0.01
 
     def test_raises_on_empty_list(self, tmp_path: Path) -> None:
         out = tmp_path / "book.pdf"
@@ -79,7 +83,7 @@ class TestBuildPdf:
 
     def test_raises_on_missing_jpeg(self, tmp_path: Path) -> None:
         out = tmp_path / "book.pdf"
-        with pytest.raises(Exception):
+        with pytest.raises(FileNotFoundError):
             build_pdf([tmp_path / "nonexistent.jpg"], out)
 
 
@@ -107,7 +111,6 @@ class TestOptimisePdf:
         jpegs = [_make_jpeg(tmp_path, "p.jpg")]
         path = tmp_path / "book.pdf"
         build_pdf(jpegs, path)
-        original_size = path.stat().st_size
         optimise_pdf(path, path)
         assert path.exists()
         with pikepdf.open(path) as pdf:
