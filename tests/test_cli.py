@@ -7,14 +7,12 @@ mocked so the suite is hermetic and fast.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
-import pytest
 from click.testing import CliRunner
 
 from kindle_pdf_capture.main import cli
-
 
 # ---------------------------------------------------------------------------
 # Helpers
