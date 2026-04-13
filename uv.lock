@@ -474,7 +474,7 @@ wheels = [
 
 [[package]]
 name = "kindle-pdf-capture"
-version = "0.0.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -505,13 +505,13 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "ocrmypdf", marker = "extra == 'ocr'", specifier = ">=16.0" },
     { name = "opencv-python", specifier = ">=4.10" },
-    { name = "pikepdf", specifier = ">=9.0" },
-    { name = "pillow", specifier = ">=11.0" },
+    { name = "pikepdf", specifier = ">=10.5.1" },
+    { name = "pillow", specifier = ">=12.2.0" },
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'", specifier = ">=11.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.14" },
-    { name = "rich", specifier = ">=14.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.1.0" },
+    { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.15.1" },
+    { name = "rich", specifier = ">=15.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
 ]
 provides-extras = ["ocr", "dev"]
