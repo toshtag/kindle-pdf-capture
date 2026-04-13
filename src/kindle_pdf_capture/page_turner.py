@@ -31,8 +31,12 @@ class AccessibilityError(PermissionError):
 # Default osascript implementations
 # ---------------------------------------------------------------------------
 
-# AppleScript snippet that sends a single key code via System Events.
-# key code 124 = right-arrow.
+# AppleScript snippets used to focus the Kindle process and send a key code.
+# Two separate -e fragments are passed to osascript so the key always reaches
+# Kindle regardless of which application currently has focus.
+_APPLESCRIPT_FOCUS_KINDLE = (
+    'tell application "System Events" to set frontmost of process "Kindle" to true'
+)
 _APPLESCRIPT_KEY_CODE = 'tell application "System Events" to key code {key_code}'
 
 # Minimal AppleScript used to probe Accessibility permission without
@@ -80,14 +84,18 @@ def _default_event_fn(event_type: int, key_code: int) -> None:
     Only key-down events (event_type == 10) trigger the osascript call;
     key-up is a no-op because System Events key code sends a full
     press-and-release in a single call.
+
+    Kindle is brought to the foreground immediately before the key is sent
+    so the event reaches Kindle even when the terminal that runs kpc has
+    keyboard focus.
     """
     _KEY_DOWN = 10
     if event_type != _KEY_DOWN:
         return
     try:
-        script = _APPLESCRIPT_KEY_CODE.format(key_code=key_code)
+        key_script = _APPLESCRIPT_KEY_CODE.format(key_code=key_code)
         result = subprocess.run(
-            ["osascript", "-e", script],
+            ["osascript", "-e", _APPLESCRIPT_FOCUS_KINDLE, "-e", key_script],
             capture_output=True,
             timeout=3,
         )
