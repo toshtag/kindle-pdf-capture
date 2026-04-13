@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-04-13
+
+### Added
+
+- `--direction left/right` CLI option (default `right`) to select the
+  page-advance key direction. Use `left` for RTL books (Japanese manga
+  etc.) and `right` for LTR books (English etc.).
+
+### Fixed
+
+- Page-turn key is now sent *before* `wait_for_render`, not after.
+  Previously the render-wait polled for a change that had not yet been
+  triggered, causing a guaranteed timeout on every page.
+- Replaced osascript key-code delivery with `CGEventPostToPid` (Quartz).
+  osascript only targets the frontmost application, so key events were
+  silently dropped whenever Kindle was in the background.
+- `focus_window()` is now called once at startup to bring Kindle to the
+  foreground before the capture loop begins.
+- Brightness-based content detection added to the cropper via a
+  `_has_dark_border` guard. Kindle's black chrome border and toolbar are
+  now excluded from captured pages.
+- Removed a duplicate-streak counter reset that fired on every
+  successfully saved page, preventing end-of-book detection from ever
+  accumulating to its threshold. The loop now stops automatically after
+  3 consecutive identical frames.
+
 ## [0.1.2] - 2026-04-13
 
 ### Fixed
@@ -42,7 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bilingual documentation (English and Japanese)
 - GitHub PR/issue templates, Dependabot, and security policy
 
-[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/toshtag/kindle-pdf-capture/releases/tag/v0.1.0
