@@ -1,0 +1,58 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug. Please fill in as much detail as possible.
+        バグ報告ありがとうございます。できるだけ詳細をご記入ください。
+
+  - type: input
+    id: macos_version
+    attributes:
+      label: macOS version / macOS バージョン
+      placeholder: "e.g. macOS 14.4"
+    validations:
+      required: true
+
+  - type: input
+    id: python_version
+    attributes:
+      label: Python version / Python バージョン
+      placeholder: "e.g. 3.11.9"
+    validations:
+      required: true
+
+  - type: input
+    id: package_version
+    attributes:
+      label: kindle-pdf-capture version
+      placeholder: "e.g. 0.1.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description / 説明
+      description: What happened? What did you expect to happen? / 何が起きましたか？どうなることを期待していましたか？
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 再現手順
+      placeholder: |
+        1. Run `kpc --out ...`
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output / エラー出力
+      description: Paste the full error output here. Use `--debug` for more detail.
+      render: shell
