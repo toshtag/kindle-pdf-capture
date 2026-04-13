@@ -12,6 +12,8 @@ import pytest
 from kindle_pdf_capture.window_capture import (
     KindleWindow,
     WindowCaptureError,
+    _is_all_black,
+    _is_all_white,
     _is_content_page,
     _pick_best_window,
     find_kindle_window,
@@ -117,6 +119,45 @@ class TestPickBestWindow:
 # ---------------------------------------------------------------------------
 
 
+class TestIsAllBlack:
+    def test_all_black_returns_true(self) -> None:
+        img = np.zeros((900, 1200, 3), dtype=np.uint8)
+        assert _is_all_black(img) is True
+
+    def test_nearly_black_returns_true(self) -> None:
+        img = np.full((900, 1200, 3), 5, dtype=np.uint8)
+        assert _is_all_black(img) is True
+
+    def test_white_returns_false(self) -> None:
+        img = np.full((900, 1200, 3), 255, dtype=np.uint8)
+        assert _is_all_black(img) is False
+
+    def test_cover_with_dark_background_returns_false(self) -> None:
+        """Dark cover pages have bright pixels (title text etc.)."""
+        img = np.zeros((900, 1200, 3), dtype=np.uint8)
+        img[100:200, 200:1000] = 220  # bright title band
+        assert _is_all_black(img) is False
+
+
+class TestIsAllWhite:
+    def test_all_white_returns_true(self) -> None:
+        img = np.full((900, 1200, 3), 255, dtype=np.uint8)
+        assert _is_all_white(img) is True
+
+    def test_nearly_white_returns_true(self) -> None:
+        img = np.full((900, 1200, 3), 252, dtype=np.uint8)
+        assert _is_all_white(img) is True
+
+    def test_black_returns_false(self) -> None:
+        img = np.zeros((900, 1200, 3), dtype=np.uint8)
+        assert _is_all_white(img) is False
+
+    def test_content_page_returns_false(self) -> None:
+        img = np.full((900, 1200, 3), 255, dtype=np.uint8)
+        img[200:700:20, 100:1100] = 30
+        assert _is_all_white(img) is False
+
+
 class TestIsContentPage:
     def test_white_image_with_text_is_content(self) -> None:
         img = np.full((900, 1200, 3), 255, dtype=np.uint8)
@@ -197,11 +238,33 @@ class TestFindKindleWindow:
                 capture_fn=self._make_capture_fn(img),
             )
 
-    def test_raises_when_capture_not_content_page(self) -> None:
-        blank = np.full((900, 1200, 3), 255, dtype=np.uint8)  # all white = loading
-        with pytest.raises(WindowCaptureError, match="content page"):
+    def test_raises_when_capture_is_all_black(self) -> None:
+        """All-black = screen recording permission missing."""
+        black = np.zeros((900, 1200, 3), dtype=np.uint8)
+        with pytest.raises(WindowCaptureError, match="black"):
+            find_kindle_window(
+                get_pid_fn=self._make_pid_fn(_KINDLE_PID),
+                list_windows_fn=self._make_list_fn([_win(w=1200, h=900)]),
+                capture_fn=self._make_capture_fn(black),
+            )
+
+    def test_raises_when_capture_is_all_white(self) -> None:
+        """All-white = loading screen."""
+        blank = np.full((900, 1200, 3), 255, dtype=np.uint8)
+        with pytest.raises(WindowCaptureError, match="loading"):
             find_kindle_window(
                 get_pid_fn=self._make_pid_fn(_KINDLE_PID),
                 list_windows_fn=self._make_list_fn([_win(w=1200, h=900)]),
                 capture_fn=self._make_capture_fn(blank),
             )
+
+    def test_continues_with_warning_for_dark_cover_page(self) -> None:
+        """Dark cover page should not raise — just warn and continue."""
+        cover = np.zeros((900, 1200, 3), dtype=np.uint8)
+        cover[100:200, 200:1000] = 220  # title band keeps it from being all-black
+        result = find_kindle_window(
+            get_pid_fn=self._make_pid_fn(_KINDLE_PID),
+            list_windows_fn=self._make_list_fn([_win(w=1200, h=900)]),
+            capture_fn=self._make_capture_fn(cover),
+        )
+        assert isinstance(result, KindleWindow)
