@@ -61,41 +61,42 @@ class TestCliHelp:
 
 class TestCliHappyPath:
     def _run(self, tmp_path: Path, extra_args: list[str] | None = None) -> object:
-        """Run the CLI with all heavy calls mocked, capturing one page then stopping."""
+        """Run the CLI with all heavy calls mocked for exactly 1 page."""
         runner = CliRunner()
         window = _make_window()
         frame = _content_bgr()
 
-        # After the first real capture, return a static frame so duplicate-streak
-        # terminates the loop quickly (3 identical frames).
-        capture_frames = [frame, frame, frame, frame]
-        capture_iter = iter(capture_frames)
+        from kindle_pdf_capture.cropper import ContentRegion
+        from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
 
         with (
             patch("kindle_pdf_capture.main.check_accessibility"),
             patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
             patch("kindle_pdf_capture.main.focus_window"),
-            patch(
-                "kindle_pdf_capture.main.capture_window",
-                side_effect=lambda w: next(capture_iter, frame),
-            ),
+            patch("kindle_pdf_capture.main.capture_window", return_value=frame),
             patch("kindle_pdf_capture.main.send_right_arrow"),
-            patch("kindle_pdf_capture.main.wait_for_render") as mock_wait,
-            patch("kindle_pdf_capture.main.detect_content_region") as mock_detect,
+            patch(
+                "kindle_pdf_capture.main.wait_for_render",
+                return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
+            ),
+            patch(
+                "kindle_pdf_capture.main.detect_content_region",
+                return_value=ContentRegion(x=50, y=50, w=1100, h=800),
+            ),
             patch("kindle_pdf_capture.main.normalize_image", return_value=frame),
             patch("kindle_pdf_capture.main.save_jpeg"),
             patch("kindle_pdf_capture.main.build_pdf"),
             patch("kindle_pdf_capture.main.optimise_pdf"),
+            patch("kindle_pdf_capture.main.time.sleep"),
         ):
-            from kindle_pdf_capture.cropper import ContentRegion
-            from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
-
-            mock_wait.return_value = WaitResult(
-                status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2
-            )
-            mock_detect.return_value = ContentRegion(x=50, y=50, w=1100, h=800)
-
-            args = ["--out", str(tmp_path / "out"), "--start-delay", "0"]
+            args = [
+                "--out",
+                str(tmp_path / "out"),
+                "--start-delay",
+                "0",
+                "--max-pages",
+                "1",
+            ]
             if extra_args:
                 args.extend(extra_args)
 
@@ -106,7 +107,7 @@ class TestCliHappyPath:
         assert result.exit_code == 0, result.output
 
     def test_max_pages_option(self, tmp_path: Path) -> None:
-        result = self._run(tmp_path, ["--max-pages", "5"])
+        result = self._run(tmp_path, ["--max-pages", "1"])
         assert result.exit_code == 0, result.output
 
     def test_jpeg_quality_option(self, tmp_path: Path) -> None:
@@ -188,30 +189,40 @@ class TestCliRetryFailed:
         window = _make_window()
         frame = _content_bgr()
 
+        from kindle_pdf_capture.cropper import ContentRegion
+        from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
+
         with (
             patch("kindle_pdf_capture.main.check_accessibility"),
             patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
             patch("kindle_pdf_capture.main.focus_window"),
             patch("kindle_pdf_capture.main.capture_window", return_value=frame),
             patch("kindle_pdf_capture.main.send_right_arrow"),
-            patch("kindle_pdf_capture.main.wait_for_render") as mock_wait,
-            patch("kindle_pdf_capture.main.detect_content_region") as mock_detect,
+            patch(
+                "kindle_pdf_capture.main.wait_for_render",
+                return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
+            ),
+            patch(
+                "kindle_pdf_capture.main.detect_content_region",
+                return_value=ContentRegion(x=50, y=50, w=1100, h=800),
+            ),
             patch("kindle_pdf_capture.main.normalize_image", return_value=frame),
             patch("kindle_pdf_capture.main.save_jpeg"),
             patch("kindle_pdf_capture.main.build_pdf"),
             patch("kindle_pdf_capture.main.optimise_pdf"),
+            patch("kindle_pdf_capture.main.time.sleep"),
         ):
-            from kindle_pdf_capture.cropper import ContentRegion
-            from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
-
-            mock_wait.return_value = WaitResult(
-                status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2
-            )
-            mock_detect.return_value = ContentRegion(x=50, y=50, w=1100, h=800)
-
             result = runner.invoke(
                 cli,
-                ["--out", str(out_dir), "--start-delay", "0", "--retry-failed"],
+                [
+                    "--out",
+                    str(out_dir),
+                    "--start-delay",
+                    "0",
+                    "--max-pages",
+                    "1",
+                    "--retry-failed",
+                ],
             )
         assert result.exit_code == 0, result.output
 
@@ -229,33 +240,52 @@ class TestCliOcr:
         window = _make_window()
         frame = _content_bgr()
 
+        # Pre-create a fake JPEG so jpeg_paths is non-empty and OCR is reached.
+        (out_dir / "cropped").mkdir(parents=True)
+        (out_dir / "pdf").mkdir(parents=True)
+        (out_dir / "logs").mkdir(parents=True)
+        fake_jpeg = out_dir / "cropped" / "page_0001.jpg"
+        fake_jpeg.write_bytes(b"FAKE")
+
+        from kindle_pdf_capture.cropper import ContentRegion
+        from kindle_pdf_capture.ocr import OcrResult, OcrStatus
+        from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
+
         with (
             patch("kindle_pdf_capture.main.check_accessibility"),
             patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
             patch("kindle_pdf_capture.main.focus_window"),
             patch("kindle_pdf_capture.main.capture_window", return_value=frame),
             patch("kindle_pdf_capture.main.send_right_arrow"),
-            patch("kindle_pdf_capture.main.wait_for_render") as mock_wait,
-            patch("kindle_pdf_capture.main.detect_content_region") as mock_detect,
+            patch(
+                "kindle_pdf_capture.main.wait_for_render",
+                return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
+            ),
+            patch(
+                "kindle_pdf_capture.main.detect_content_region",
+                return_value=ContentRegion(x=50, y=50, w=1100, h=800),
+            ),
             patch("kindle_pdf_capture.main.normalize_image", return_value=frame),
             patch("kindle_pdf_capture.main.save_jpeg"),
             patch("kindle_pdf_capture.main.build_pdf"),
             patch("kindle_pdf_capture.main.optimise_pdf"),
-            patch("kindle_pdf_capture.main.run_ocr") as mock_ocr,
+            patch(
+                "kindle_pdf_capture.main.run_ocr",
+                return_value=OcrResult(status=OcrStatus.SUCCESS, output="", returncode=0),
+            ) as mock_ocr,
+            patch("kindle_pdf_capture.main.time.sleep"),
         ):
-            from kindle_pdf_capture.cropper import ContentRegion
-            from kindle_pdf_capture.ocr import OcrResult, OcrStatus
-            from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
-
-            mock_wait.return_value = WaitResult(
-                status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2
-            )
-            mock_detect.return_value = ContentRegion(x=50, y=50, w=1100, h=800)
-            mock_ocr.return_value = OcrResult(status=OcrStatus.SUCCESS, output="", returncode=0)
-
             result = runner.invoke(
                 cli,
-                ["--out", str(out_dir), "--start-delay", "0", "--ocr"],
+                [
+                    "--out",
+                    str(out_dir),
+                    "--start-delay",
+                    "0",
+                    "--max-pages",
+                    "1",
+                    "--ocr",
+                ],
             )
         assert result.exit_code == 0, result.output
         mock_ocr.assert_called_once()
