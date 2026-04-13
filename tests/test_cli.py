@@ -228,6 +228,70 @@ class TestCliRetryFailed:
 
 
 # ---------------------------------------------------------------------------
+# Page-turn order: send_right_arrow must be called BEFORE wait_for_render
+# ---------------------------------------------------------------------------
+
+
+class TestPageTurnOrder:
+    def test_send_right_arrow_called_before_wait_for_render(self, tmp_path: Path) -> None:
+        """After capturing a page, the key event must be sent first, then
+        wait_for_render polls until the *new* page has settled.
+
+        The wrong order (wait_for_render → capture → send_right_arrow) causes
+        the render-wait to converge immediately on the already-stable page,
+        so every capture ends up being the same page.
+        """
+        call_order: list[str] = []
+
+        runner = CliRunner()
+        window = _make_window()
+        frame = _content_bgr()
+
+        from kindle_pdf_capture.cropper import ContentRegion
+        from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
+
+        def _record_arrow(*_a, **_kw) -> None:
+            call_order.append("send_right_arrow")
+
+        def _record_wait(*_a, **_kw) -> WaitResult:
+            call_order.append("wait_for_render")
+            return WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2)
+
+        with (
+            patch("kindle_pdf_capture.main.check_accessibility"),
+            patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
+            patch("kindle_pdf_capture.main.focus_window"),
+            patch("kindle_pdf_capture.main.capture_window", return_value=frame),
+            patch("kindle_pdf_capture.main.send_right_arrow", side_effect=_record_arrow),
+            patch("kindle_pdf_capture.main.wait_for_render", side_effect=_record_wait),
+            patch(
+                "kindle_pdf_capture.main.detect_content_region",
+                return_value=ContentRegion(x=50, y=50, w=1100, h=800),
+            ),
+            patch("kindle_pdf_capture.main.normalize_image", return_value=frame),
+            patch("kindle_pdf_capture.main.save_jpeg"),
+            patch("kindle_pdf_capture.main.build_pdf"),
+            patch("kindle_pdf_capture.main.optimise_pdf"),
+            patch("kindle_pdf_capture.main.time.sleep"),
+        ):
+            result = runner.invoke(
+                cli,
+                ["--out", str(tmp_path / "out"), "--start-delay", "0", "--max-pages", "1"],
+            )
+
+        assert result.exit_code == 0, result.output
+        # send_right_arrow must appear before wait_for_render in the call sequence
+        assert "send_right_arrow" in call_order
+        assert "wait_for_render" in call_order
+        arrow_idx = call_order.index("send_right_arrow")
+        wait_idx = call_order.index("wait_for_render")
+        assert arrow_idx < wait_idx, (
+            f"Expected send_right_arrow (pos {arrow_idx}) before "
+            f"wait_for_render (pos {wait_idx}), got: {call_order}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # --ocr flag
 # ---------------------------------------------------------------------------
 
