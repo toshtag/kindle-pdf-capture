@@ -176,6 +176,64 @@ class TestDetectContentRegionEdgeCases:
 
 
 # ---------------------------------------------------------------------------
+# detect_content_region: Kindle black-border layout
+# ---------------------------------------------------------------------------
+
+
+class TestDetectContentRegionKindleLayout:
+    def test_detects_page_inside_black_border(self) -> None:
+        """White page centred in a black Kindle window should be detected.
+
+        Kindle surrounds the book page with a black background.  The cropper
+        must isolate the bright page area, not the entire window.
+        """
+        # 1200x900 black canvas
+        img = np.zeros((900, 1200, 3), dtype=np.uint8)
+        # White page occupying the central ~70% of the window
+        px, py, pw, ph = 180, 90, 840, 720
+        img[py : py + ph, px : px + pw] = 240
+
+        region = detect_content_region(img)
+
+        # The detected region must be inside the page, not the black border
+        assert region.x >= 0
+        assert region.y >= 0
+        # Should not extend into the black border on either side by more than
+        # the expansion margin (15 px default)
+        assert region.x <= px + 20
+        assert region.y <= py + 20
+        assert region.x + region.w >= px + pw - 20
+        assert region.y + region.h >= py + ph - 20
+
+    def test_dark_cover_page_inside_black_border(self) -> None:
+        """A dark (non-white) cover page inside a black border must not raise.
+
+        Cover pages may be dark-brown / dark-coloured.  As long as there is
+        a meaningful brightness difference between the page and the Kindle
+        chrome, cropping should succeed.
+        """
+        img = np.zeros((900, 1200, 3), dtype=np.uint8)
+        # Dark-brown cover page — value ~40, clearly brighter than pure black (0)
+        px, py, pw, ph = 180, 90, 840, 720
+        img[py : py + ph, px : px + pw] = 40
+
+        # Must not raise — a dark cover is still a valid page
+        region = detect_content_region(img)
+        assert isinstance(region, ContentRegion)
+
+    def test_black_border_excluded_from_region(self) -> None:
+        """The detected region must not start at x=0 when there is a black border."""
+        img = np.zeros((900, 1200, 3), dtype=np.uint8)
+        # White page with clear black borders on left and right
+        img[0:900, 150:1050] = 240
+
+        region = detect_content_region(img)
+
+        # x must be > 0; the black left border should be excluded
+        assert region.x > 0
+
+
+# ---------------------------------------------------------------------------
 # fallback_crop
 # ---------------------------------------------------------------------------
 

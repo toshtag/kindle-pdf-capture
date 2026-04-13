@@ -31,7 +31,7 @@ def _white_bgr(w: int = 1200, h: int = 900) -> np.ndarray:
 
 def _content_bgr() -> np.ndarray:
     img = _white_bgr()
-    img[200:700:20, 100:1100] = 30  # text-like lines
+    img[200:700, 100:1100] = 30  # solid dark region — distinct from white at any downscale
     return img
 
 
@@ -167,9 +167,35 @@ class TestCaptureSessionEndDetection:
         img_b = _content_bgr()
         session.record_duplicate(img_a)
         session.record_duplicate(img_a)
-        session.record_result(PageResult(1, PageStatus.OK, None))  # new page -> reset
-        session.record_duplicate(img_b)
+        session.record_duplicate(img_b)  # different image resets streak via record_duplicate
         assert session.is_finished() is False
+
+    def test_ok_result_does_not_reset_duplicate_streak(self, tmp_path: Path) -> None:
+        """record_result(OK) must NOT reset the duplicate streak.
+
+        In the capture loop the sequence is:
+          record_result(OK) → send key → wait → next_frame → record_duplicate
+
+        If record_result resets the streak, consecutive same-frame detections
+        after a failed key press can never accumulate to the limit, so the
+        loop runs forever (until max_pages).
+        """
+        session = CaptureSession(_config(tmp_path))
+        img = _white_bgr()
+
+        # Two consecutive duplicate detections
+        session.record_duplicate(img)
+        session.record_duplicate(img)
+        # streak is now 2
+
+        # Saving a page result must NOT reset the streak back to 0
+        session.record_result(PageResult(1, PageStatus.OK, None))
+
+        # Third duplicate — must reach the limit (3) and trigger is_finished
+        session.record_duplicate(img)
+        assert session.is_finished() is True, (
+            "Duplicate streak should have reached 3; record_result(OK) must not reset it."
+        )
 
 
 # ---------------------------------------------------------------------------
