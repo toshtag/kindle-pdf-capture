@@ -156,3 +156,26 @@ class TestDefaultEventFn:
     def test_does_not_raise_on_exception(self) -> None:
         with patch("subprocess.run", side_effect=OSError):
             _default_event_fn(10, 124)  # should not raise
+
+    def test_activates_kindle_process_before_key_event(self) -> None:
+        """The osascript command must bring the Kindle process to the
+        foreground before sending the key code.
+
+        Without this, the key event goes to the terminal (or whichever app
+        has focus when kpc is running), not to Kindle, so pages never turn.
+        """
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            _default_event_fn(10, 124)
+            assert mock_run.called
+            # Build the full string of all arguments passed to osascript
+            call_args = mock_run.call_args[0][0]
+            script_text = " ".join(call_args)
+            # Must reference the Kindle process to bring it to the front
+            assert "Kindle" in script_text, (
+                "osascript command must target the Kindle process; got: " + script_text
+            )
+            # Must set the process as frontmost (or activate it) before the key
+            assert "frontmost" in script_text or "activate" in script_text.lower(), (
+                "osascript command must activate/focus Kindle; got: " + script_text
+            )
