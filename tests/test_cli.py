@@ -398,10 +398,14 @@ def _run_with_direction(tmp_path: Path, direction: str) -> tuple[object, list]:
         result = runner.invoke(
             cli,
             [
-                "--out", str(tmp_path / "out"),
-                "--start-delay", "0",
-                "--max-pages", "1",
-                "--direction", direction,
+                "--out",
+                str(tmp_path / "out"),
+                "--start-delay",
+                "0",
+                "--max-pages",
+                "1",
+                "--direction",
+                direction,
             ],
         )
     return result, key_codes_used
