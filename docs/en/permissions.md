@@ -18,6 +18,7 @@ Required to send key events (page-turn arrow key) to Kindle.
 1. Open **System Settings** > **Privacy & Security** > **Accessibility**
 2. Click the **+** button and add your terminal application
 3. Enable the checkbox next to it
+4. Restart the terminal
 
 ## Verification
 
@@ -31,6 +32,7 @@ If either permission is missing, you will see a clear error message with instruc
 
 ## Notes
 
-- Permissions are per-application. If you use a virtual environment or a different shell, the parent terminal application still needs the permission.
-- After granting permissions, you may need to restart the terminal for changes to take effect.
+- Permissions are per-application. Grant the permission to the terminal application that launches `kpc` (Terminal.app, iTerm2, Cursor, VSCode, etc.) — not to the Python binary inside the virtual environment.
+- After granting permissions, restart the terminal for changes to take effect.
 - On Apple Silicon Macs, permissions are enforced even for processes run with `sudo`.
+- If you run `kpc` from Cursor or VSCode, grant the permission to `Cursor.app` or `VSCode.app` respectively.
