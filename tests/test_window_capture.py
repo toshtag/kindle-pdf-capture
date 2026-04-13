@@ -6,9 +6,6 @@ macOS screen-recording permissions and pass on any platform.
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
 import numpy as np
 import pytest
 
@@ -19,7 +16,6 @@ from kindle_pdf_capture.window_capture import (
     _pick_best_window,
     find_kindle_window,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers: fake Quartz window-info dictionaries
