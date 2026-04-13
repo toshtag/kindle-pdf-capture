@@ -8,11 +8,9 @@ Coordinate system: (x, y, w, h) — OpenCV convention.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from kindle_pdf_capture.cropper import (
     ContentRegion,
@@ -20,7 +18,6 @@ from kindle_pdf_capture.cropper import (
     detect_content_region,
     fallback_crop,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers: synthetic image builders
