@@ -29,6 +29,10 @@ _MIN_HEIGHT = 600
 _MIN_BRIGHTNESS_RATIO = 0.50  # at least 50% of pixels are bright (near-white)
 _MIN_EDGE_DENSITY = 0.005  # at least 0.5% of pixels have edges (text strokes)
 
+# Thresholds for degenerate captures
+_ALL_BLACK_THRESHOLD = 10  # mean luminance below this → screen recording blocked
+_ALL_WHITE_THRESHOLD = 250  # mean luminance above this → loading screen
+
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -103,6 +107,18 @@ def _pick_best_window(
             best = KindleWindow(pid=kindle_pid, window_id=wid, x=x, y=y, width=w, height=h)
 
     return best
+
+
+def _is_all_black(bgr: np.ndarray) -> bool:
+    """Return True when the image is uniformly black (screen recording blocked)."""
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    return float(gray.mean()) < _ALL_BLACK_THRESHOLD
+
+
+def _is_all_white(bgr: np.ndarray) -> bool:
+    """Return True when the image is uniformly white (Kindle loading screen)."""
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    return float(gray.mean()) > _ALL_WHITE_THRESHOLD
 
 
 def _is_content_page(bgr: np.ndarray) -> bool:
@@ -258,11 +274,21 @@ def find_kindle_window(
     )
 
     screenshot = capture_fn(window)
-    if not _is_content_page(screenshot):
+    if _is_all_black(screenshot):
         raise WindowCaptureError(
-            "The Kindle window does not appear to show a content page "
-            "(it may be showing the library or store). "
-            "Please navigate to a book page and try again."
+            "The captured Kindle window is completely black. "
+            "Please grant Screen Recording permission to your terminal application: "
+            "System Settings → Privacy & Security → Screen Recording."
+        )
+    if _is_all_white(screenshot):
+        raise WindowCaptureError(
+            "The Kindle window appears to be loading. "
+            "Please wait until a book page is visible and try again."
+        )
+    if not _is_content_page(screenshot):
+        logger.warning(
+            "The Kindle window does not look like a standard reading page "
+            "(it may be showing a cover or image page). Continuing anyway."
         )
 
     return window
