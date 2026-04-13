@@ -127,7 +127,9 @@ class TestDefaultSendKey:
 
         mock_event = MagicMock()
         with (
-            patch("kindle_pdf_capture.page_turner.CGEventCreateKeyboardEvent", return_value=mock_event),
+            patch(
+                "kindle_pdf_capture.page_turner.CGEventCreateKeyboardEvent", return_value=mock_event
+            ),
             patch("kindle_pdf_capture.page_turner.CGEventPostToPid") as mock_post,
         ):
             _default_send_key(KEY_LEFT, 1234)
@@ -164,7 +166,10 @@ class TestDefaultSendKey:
     def test_does_not_raise_on_quartz_failure(self) -> None:
         from kindle_pdf_capture.page_turner import _default_send_key
 
-        with patch("kindle_pdf_capture.page_turner.CGEventCreateKeyboardEvent", side_effect=Exception("no quartz")):
+        with patch(
+            "kindle_pdf_capture.page_turner.CGEventCreateKeyboardEvent",
+            side_effect=Exception("no quartz"),
+        ):
             _default_send_key(KEY_LEFT, 1234)  # must not raise
 
 

@@ -106,8 +106,8 @@ def _has_dark_border(gray: np.ndarray, *, border_width: int = 20, threshold: int
     def _dark(strip: np.ndarray) -> bool:
         return float((strip <= threshold).sum()) / strip.size > 0.80
 
-    return (_dark(gray[:, :bw]) and _dark(gray[:, w - bw:])) or (
-        _dark(gray[:bw, :]) and _dark(gray[h - bw:, :])
+    return (_dark(gray[:, :bw]) and _dark(gray[:, w - bw :])) or (
+        _dark(gray[:bw, :]) and _dark(gray[h - bw :, :])
     )
 
 
@@ -243,7 +243,10 @@ def detect_content_region(
     if region is not None:
         logger.debug(
             "Content region (brightness): x=%d y=%d w=%d h=%d",
-            region.x, region.y, region.w, region.h,
+            region.x,
+            region.y,
+            region.w,
+            region.h,
         )
         return region
 
@@ -252,7 +255,10 @@ def detect_content_region(
     if region is not None:
         logger.debug(
             "Content region (edges): x=%d y=%d w=%d h=%d",
-            region.x, region.y, region.w, region.h,
+            region.x,
+            region.y,
+            region.w,
+            region.h,
         )
         return region
 

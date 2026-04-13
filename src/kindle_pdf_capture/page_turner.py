@@ -20,7 +20,7 @@ from kindle_pdf_capture.window_capture import KindleWindow
 logger = logging.getLogger(__name__)
 
 # macOS virtual key codes
-KEY_LEFT: int = 123   # left-arrow  — next page in RTL (e.g. Japanese) books
+KEY_LEFT: int = 123  # left-arrow  — next page in RTL (e.g. Japanese) books
 KEY_RIGHT: int = 124  # right-arrow — next page in LTR (e.g. English) books
 
 
