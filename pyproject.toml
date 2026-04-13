@@ -28,7 +28,7 @@ dependencies = [
     "img2pdf>=0.5.1",
     "numpy>=2.0",
     "opencv-python>=4.10",
-    "pikepdf>=9.0",
+    "pikepdf>=10.5.1",
     "pillow>=12.2.0",
     "pyobjc-framework-Quartz>=11.0 ; sys_platform == 'darwin'",
     "rich>=15.0.0",
