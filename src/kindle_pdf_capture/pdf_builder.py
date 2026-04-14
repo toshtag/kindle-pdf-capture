@@ -18,16 +18,18 @@ import pikepdf
 logger = logging.getLogger(__name__)
 
 
-def build_pdf(jpeg_paths: list[Path], output: Path) -> None:
+def build_pdf(jpeg_paths: list[Path], output: Path, *, dpi: float = 300.0) -> None:
     """Assemble JPEG files into a single PDF.
 
-    Page size in the PDF matches each image's pixel dimensions exactly
-    (img2pdf embeds at 72 DPI by default so 1px = 1pt).
+    Page size is determined by *dpi*: each pixel maps to 72/dpi points.
+    At the default 300 DPI a 1800 px wide image becomes 432 pt (6 inches),
+    which is a natural book-page width.
 
     Args:
         jpeg_paths: Ordered list of JPEG file paths (one per page).
         output: Destination PDF path. Parent directories are created
             automatically.
+        dpi: Resolution for page-size calculation (default 300).
 
     Raises:
         ValueError: If *jpeg_paths* is empty.
@@ -44,8 +46,10 @@ def build_pdf(jpeg_paths: list[Path], output: Path) -> None:
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Building PDF from %d pages -> %s", len(jpeg_paths), output)
-    pdf_bytes = img2pdf.convert([str(p) for p in jpeg_paths])
+    layout_fun = img2pdf.get_fixed_dpi_layout_fun((dpi, dpi))
+
+    logger.info("Building PDF from %d pages -> %s (dpi=%.0f)", len(jpeg_paths), output, dpi)
+    pdf_bytes = img2pdf.convert([str(p) for p in jpeg_paths], layout_fun=layout_fun)
     output.write_bytes(pdf_bytes)
     logger.debug("PDF written: %s (%d bytes)", output, len(pdf_bytes))
 

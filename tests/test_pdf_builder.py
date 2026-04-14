@@ -86,6 +86,37 @@ class TestBuildPdf:
         with pytest.raises(FileNotFoundError):
             build_pdf([tmp_path / "nonexistent.jpg"], out)
 
+    def test_dpi_parameter_controls_page_size(self, tmp_path: Path) -> None:
+        """build_pdf(dpi=300) should produce page width = pixel_width * 72 / 300."""
+        import pikepdf
+
+        jpeg = _make_jpeg(tmp_path, "p.jpg", width=1800, height=2400)
+        out = tmp_path / "book.pdf"
+        build_pdf([jpeg], out, dpi=300.0)
+        with pikepdf.open(out) as pdf:
+            page = pdf.pages[0]
+            mb = page.mediabox
+            w_pt = float(mb[2])
+            h_pt = float(mb[3])
+            # 1800 px at 300 DPI = 1800 * 72 / 300 = 432 pt = 6 inches
+            assert abs(w_pt - 432.0) < 1.0
+            # 2400 px at 300 DPI = 2400 * 72 / 300 = 576 pt = 8 inches
+            assert abs(h_pt - 576.0) < 1.0
+
+    def test_default_dpi_produces_reasonable_page_size(self, tmp_path: Path) -> None:
+        """Default DPI should produce pages with width around 6 inches (432 pt)."""
+        import pikepdf
+
+        jpeg = _make_jpeg(tmp_path, "p.jpg", width=1800, height=2400)
+        out = tmp_path / "book.pdf"
+        build_pdf([jpeg], out)
+        with pikepdf.open(out) as pdf:
+            page = pdf.pages[0]
+            mb = page.mediabox
+            w_pt = float(mb[2])
+            # With default DPI of 300: 1800 * 72 / 300 = 432 pt
+            assert w_pt < 500, f"Page too wide: {w_pt} pt ({w_pt / 72:.1f} inches)"
+
 
 # ---------------------------------------------------------------------------
 # optimise_pdf

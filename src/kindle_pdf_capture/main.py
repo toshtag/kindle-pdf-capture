@@ -150,7 +150,7 @@ def _run_capture(
 
     pdf_path = config.out_dir / "pdf" / "book.pdf"
     log.info("Building PDF from %d pages …", len(jpeg_paths))
-    build_pdf(jpeg_paths, pdf_path)
+    build_pdf(jpeg_paths, pdf_path, dpi=config.pdf_dpi)
     optimise_pdf(pdf_path, pdf_path)
     log.info("PDF saved to %s", pdf_path)
 
@@ -219,6 +219,12 @@ def _run_capture(
     ),
 )
 @click.option(
+    "--pdf-dpi",
+    default=300.0,
+    show_default=True,
+    help="DPI for PDF page sizing. 300 maps 1800 px to 6 inches.",
+)
+@click.option(
     "--ocr",
     is_flag=True,
     default=False,
@@ -256,6 +262,7 @@ def cli(
     save_raw: bool,
     start_delay: int,
     direction: str,
+    pdf_dpi: float,
     ocr: bool,
     ocr_lang: str,
     ocr_optimize: int,
@@ -275,6 +282,7 @@ def cli(
         jpeg_quality=jpeg_quality,
         save_raw=save_raw,
         start_delay=start_delay,
+        pdf_dpi=pdf_dpi,
         ocr=ocr,
         ocr_lang=ocr_lang,
         ocr_optimize=ocr_optimize,
