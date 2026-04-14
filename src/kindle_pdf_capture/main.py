@@ -129,6 +129,10 @@ def _run_capture(
         time.sleep(config.start_delay)
 
     page_num = 1
+    # Lock the crop y-coordinate after the first reading-mode page so all
+    # subsequent pages share the same height regardless of per-frame variance
+    # in _find_header_bottom.  None until the first reading-mode page is seen.
+    locked_crop_y: int | None = None
 
     try:
         while not session.is_finished():
@@ -157,6 +161,28 @@ def _run_capture(
             # Detect content region and crop
             try:
                 region = detect_content_region(frame)
+
+                # For reading-mode pages (full-width rect with Kindle header
+                # stripped), lock the crop y on the first occurrence so all
+                # subsequent pages share the same height.
+                # A cover/image page has region.y == titlebar_y (only the macOS
+                # title bar removed); reading-mode pages have a larger y because
+                # the Kindle header band is also stripped.  Only lock when y
+                # exceeds the title-bar-only threshold (80px in logical pixels
+                # at 2x Retina = 40 logical px covers any title bar we've seen).
+                _TITLEBAR_ONLY_THRESHOLD = 80
+                if region.w == frame.shape[1] and region.y >= _TITLEBAR_ONLY_THRESHOLD:
+                    if locked_crop_y is None:
+                        locked_crop_y = region.y
+                        log.debug("Locked crop y=%d from page %d.", locked_crop_y, page_num)
+                    elif region.y != locked_crop_y:
+                        region = region.__class__(
+                            x=region.x,
+                            y=locked_crop_y,
+                            w=region.w,
+                            h=frame.shape[0] - locked_crop_y,
+                        )
+
                 cropped = frame[region.slice()]
                 # Scale the cropped region proportionally to the raw frame width so
                 # that all pages share the same pixels-per-physical-unit ratio and
