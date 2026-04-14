@@ -905,5 +905,5 @@ class TestApplyCropLock:
         for i, y in enumerate(ys):
             region = self._make_region(x=0, y=y, w=1200, h=900 - y)
             region, locked = _apply_crop_lock(region, frame, titlebar_y, locked)
-            assert region.y == 130, f"Page {i+1}: y must be 130, got {region.y}"
+            assert region.y == 130, f"Page {i + 1}: y must be 130, got {region.y}"
         assert locked == 130

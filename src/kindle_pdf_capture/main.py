@@ -348,16 +348,12 @@ def _run_capture(
 
             log.info("Capturing page %d …", page_num)
 
-            locked_crop_y = _capture_one_page(
-                page_num, window, config, session, locked_crop_y
-            )
+            locked_crop_y = _capture_one_page(page_num, window, config, session, locked_crop_y)
 
             send_page_turn_key(window.pid, key_code)
             wait_result = wait_for_render(capture_fn=lambda: capture_window(window))
             if wait_result.status == WaitStatus.TIMEOUT:
-                log.warning(
-                    "Page %d: render timed out after %.1fs", page_num, wait_result.elapsed
-                )
+                log.warning("Page %d: render timed out after %.1fs", page_num, wait_result.elapsed)
 
             next_frame = capture_window(window)
             session.record_duplicate(next_frame)
