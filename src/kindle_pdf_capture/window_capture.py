@@ -203,13 +203,18 @@ def _default_capture(window: KindleWindow) -> np.ndarray:
         height = Quartz.CGImageGetHeight(cg_image)
         bpc = Quartz.CGImageGetBitsPerComponent(cg_image)
         bpp = Quartz.CGImageGetBitsPerPixel(cg_image)
+        bytes_per_row = Quartz.CGImageGetBytesPerRow(cg_image)
 
         from Quartz.CoreGraphics import CGDataProviderCopyData
 
         raw = CGDataProviderCopyData(Quartz.CGImageGetDataProvider(cg_image))
-        arr = np.frombuffer(raw, dtype=np.uint8).reshape((height, width, bpp // bpc))
-        # CG returns BGRA; drop alpha and keep BGR
-        bgr = arr[:, :, :3].copy()
+        # CGImage row data may include padding bytes for memory alignment.
+        # Reshape using the actual bytes_per_row stride, then slice to true width.
+        channels = bpp // bpc
+        stride_pixels = bytes_per_row // channels
+        arr = np.frombuffer(raw, dtype=np.uint8).reshape((height, stride_pixels, channels))
+        # Slice to true pixel width and drop alpha (CG returns BGRA → BGR)
+        bgr = arr[:, :width, :3].copy()
         return bgr
     except WindowCaptureError:
         raise
