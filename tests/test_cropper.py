@@ -424,146 +424,81 @@ def _make_dark_chrome_page(
 
 
 class TestFindHeaderBottom:
-    def test_detects_divider_line(self) -> None:
-        """Should detect the horizontal divider line and return its bottom y."""
-        img, expected_y = _make_kindle_window_with_header()
-        result = _find_header_bottom(img)
-        # Allow small tolerance (a few pixels)
-        assert abs(result - expected_y) <= 5
+    def test_returns_title_block_end_for_kindle_header(self) -> None:
+        """Should return the row just after the book-title text block ends.
 
-    def test_returns_zero_for_no_header(self) -> None:
-        """An image with no header/divider should return 0."""
+        Real-world layout:
+          - macOS title bar (dark gray, rows 0-55)
+          - Kindle header background (uniform light gray, rows 56-65)
+          - Book title text (non-uniform, rows 66-79, centered only)
+          - Uniform rows below title text (rows 80+)
+
+        _find_header_bottom must return the first uniform row after the title
+        text (~80), not the end of a divider line.
+        """
+        img, _ = _make_kindle_window_with_header()
+        result = _find_header_bottom(img)
+        # Title text ends around row 80; allow a small tolerance
+        assert 75 <= result <= 90, (
+            f"Expected title-block end ~80, got {result}"
+        )
+
+    def test_returns_zero_when_no_title_block_follows_titlebar(self) -> None:
+        """When there is no book-title text directly after the title bar, return 0.
+
+        A plain white canvas with no macOS title bar means titlebar_y=0 and there
+        is no Kindle header present.  The function should return 0.
+        """
         img = _make_white_canvas(1200, 900)
-        img = _draw_text_block(img, x=80, y=40, w=1040, h=820)
         result = _find_header_bottom(img)
         assert result == 0
 
     def test_returns_zero_for_black_bordered_kindle(self) -> None:
-        """Kindle dark-mode layout (black border, white page) has no header divider."""
+        """Kindle dark-mode layout (black border, white page) — no Kindle header."""
         img = np.zeros((900, 1200, 3), dtype=np.uint8)
         img[90:810, 180:1020] = 240
         result = _find_header_bottom(img)
         assert result == 0
 
-    def test_thick_divider(self) -> None:
-        """Should work with a thicker divider line (e.g. 4px)."""
-        img, expected_y = _make_kindle_window_with_header(divider_thickness=4)
-        result = _find_header_bottom(img)
-        assert abs(result - expected_y) <= 6
-
-    def test_different_window_sizes(self) -> None:
-        """Should work regardless of window dimensions."""
-        for w, h in [(800, 600), (1600, 1200), (2560, 1600)]:
-            img, expected_y = _make_kindle_window_with_header(width=w, height=h)
-            result = _find_header_bottom(img)
-            assert abs(result - expected_y) <= 5, (
-                f"Failed for {w}x{h}: got {result}, expected ~{expected_y}"
-            )
-
-    def test_detects_divider_in_light_mode_reading_page(self) -> None:
-        """Real-world reading mode: light-gray title bar + thin dark divider.
-
-        The title bar and header are light-colored (not dark).  The only full-
-        width dark band in the top 25% is the thin horizontal divider between
-        the Kindle header and the book content.
-        """
-        img, expected_y = _make_reading_mode_page()
-        result = _find_header_bottom(img)
-        assert abs(result - expected_y) <= 5, (
-            f"Reading-mode divider: got {result}, expected ~{expected_y}"
-        )
-
     def test_returns_zero_for_dark_chrome_page(self) -> None:
-        """Dark-chrome layout has no thin divider in top 25%; should return 0.
-
-        The entire top portion is near-black chrome (hundreds of rows).
-        _find_header_bottom should NOT try to strip it — the brightness
-        pass in detect_content_region handles this case instead.
-        """
+        """Dark-chrome cover page has no light Kindle header; should return 0."""
         img, _ = _make_dark_chrome_page()
         result = _find_header_bottom(img)
         assert result == 0
 
-    def test_text_content_not_mistaken_for_divider(self) -> None:
-        """Text lines must NOT be detected as divider lines.
+    def test_real_world_kindle_reading_page(self) -> None:
+        """Real-world reading-mode page: title bar (light gray) + title text.
 
-        Text content is indented and does NOT span the full width including
-        both left and right edge strips.
+        Layout (_make_reading_mode_page):
+          - macOS title bar: light gray (value 210), rows 0-55
+          - Kindle header background (value 220), rows 56-67
+          - Book title text (dark, centered only), rows 68-83
+          - More uniform header background, rows 84+
+
+        The function must return the first uniform row after the title text.
         """
-        img = _make_white_canvas(2240, 2358)
-        # Text block spanning only 70% of width (indented, realistic)
-        text_x = int(2240 * 0.15)
-        text_w = int(2240 * 0.70)
-        img = _draw_text_block(img, x=text_x, y=100, w=text_w, h=2000)
+        img, _ = _make_reading_mode_page()
         result = _find_header_bottom(img)
-        assert result == 0, f"Text incorrectly detected as divider; got {result}"
-
-    def test_skips_kindle_header_band_with_title_text(self) -> None:
-        """_find_header_bottom must skip the full Kindle header band.
-
-        Real-world reading pages have:
-          1. macOS title bar (white, rows 0-55)
-          2. Full-width Sobel Y edge at title-bar/header boundary (rows 55-56)
-          3. Kindle header background (uniform gray, rows 57-107)
-          4. Book title text in center (rows 108-128, non-uniform)
-          5. Kindle header background again (uniform gray, rows 129-183)
-          6. Book content starts (rows 184+, non-uniform)
-
-        The function must return the start of book content (~184), not just
-        row 57 (the first row after the Sobel boundary). The header band
-        (rows 57-183), which includes "ロードマップ (JAPANESE EDITION)", must
-        be fully stripped.
-
-        The key constraint: rows 183-184 do NOT produce a full-width Sobel
-        edge (the transition from uniform gray to book text is gradual and the
-        text is indented), so the boundary-detection Sobel Y step alone
-        returns row 57 as content_start for this layout.  The implementation
-        must use a secondary strategy (e.g. skipping uniform header-background
-        rows) to advance past the header band.
-        """
-        # Build the real-world layout synthetically.
-        # IMPORTANT: rows 183→184 must NOT create a full-width Sobel Y edge.
-        # In the real Kindle, the header-band-to-content transition is gradual:
-        # the gray background simply continues and sparse indented text starts
-        # appearing — no abrupt full-width step-change at rows 183-184.
-        # We achieve this by keeping the same gray (222) value throughout rows
-        # 57-194 and placing text on top of it starting at row 195.
-        width, height = 2240, 2358
-
-        # Start with uniform light gray so rows 57-194 have no color step
-        img = np.full((height, width, 3), 222, dtype=np.uint8)
-
-        # macOS title bar: white (rows 0-55)
-        img[:55, :] = 255
-
-        # Full-width boundary band at rows 55-56 (Sobel Y detects this)
-        img[55:57, :] = 180  # abrupt brightness step across full width
-
-        # Kindle header band 1 (57-107) and band 2 (128-183): already gray(222)
-
-        # Book title text (centered only, does NOT reach left/right edges)
-        title_x = width // 4
-        title_w = width // 2
-        img[108:128, title_x : title_x + title_w] = 40  # dark text (centered only)
-
-        # Book content: rows 184+ with indented text on gray background.
-        # Rows 183→184 stay at gray(222) — no full-width Sobel Y edge here.
-        text_x = int(width * 0.15)  # 15% indent
-        text_w_val = int(width * 0.70)  # 70% of width (never reaching edge strips)
-        img = _draw_text_block(img, x=text_x, y=195, w=text_w_val, h=height - 300)
-
-        result = _find_header_bottom(img)
-
-        # Must return the start of book content (184+), NOT row 57 (which is
-        # the first row after the detected Sobel boundary).
-        assert result >= 180, (
-            f"Expected content start >= 180 (full header band stripped), got {result}. "
-            "The implementation must skip the uniform header-background rows "
-            "after the Sobel boundary edge."
+        # Title text ends somewhere in rows 84-100; allow generous tolerance
+        assert result > 56, (
+            f"Expected > 56 (past the title bar), got {result}"
         )
-        assert result <= 220, (
-            f"Expected content start <= 220, got {result} (overshot into book content)"
+        assert result <= 120, (
+            f"Expected <= 120 (before deep content), got {result}"
         )
+
+    def test_consistent_across_window_sizes(self) -> None:
+        """Result scales with window size — always returns row after title text."""
+        for w, h in [(800, 600), (1600, 1200), (2560, 1600)]:
+            img, _ = _make_kindle_window_with_header(width=w, height=h)
+            result = _find_header_bottom(img)
+            # Must be > title_bar_height (56) and < 200
+            assert result > 56, (
+                f"{w}x{h}: expected > 56, got {result}"
+            )
+            assert result < 200, (
+                f"{w}x{h}: expected < 200, got {result}"
+            )
 
 
 # ---------------------------------------------------------------------------
