@@ -4,6 +4,30 @@ Invoked as: kpc [OPTIONS]
 
 All hardware-level calls are imported at the top so tests can patch them
 at the module level via ``patch("kindle_pdf_capture.main.<name>")``.
+
+## Module structure
+
+The capture pipeline is split into focused helpers so each concern can be
+read, tested, and reasoned about independently:
+
+  _phase0_resize_window(window)
+      Captures the cover frame, measures the page width via brightness
+      detection, and resizes the Kindle window to match the book's natural
+      aspect ratio.  Returns the original window size (for later restore) or
+      None if the resize was skipped.
+
+  _apply_crop_lock(region, frame, titlebar_y, locked_crop_y)
+      Enforces a stable y-coordinate across all reading-mode pages.  On the
+      first reading-mode page the y is "locked"; subsequent pages are clamped
+      to the same value so font/layout variance in _find_header_bottom does
+      not produce different heights across pages.
+
+  _capture_one_page(page_num, window, config, session, locked_crop_y)
+      Captures, crops, normalises, and saves a single page.  Returns the
+      (possibly updated) locked_crop_y.
+
+  _run_capture(config, pages_to_retry, key_code)
+      Outer loop: Phase 0, page loop, PDF build, optional OCR.
 """
 
 from __future__ import annotations
@@ -39,6 +63,7 @@ from kindle_pdf_capture.page_turner import (
 from kindle_pdf_capture.pdf_builder import build_pdf, optimise_pdf
 from kindle_pdf_capture.render_wait import WaitStatus, wait_for_render
 from kindle_pdf_capture.window_capture import (
+    KindleWindow,
     WindowCaptureError,
     capture_window,
     find_kindle_window,
@@ -58,38 +83,52 @@ def _setup_logging(debug: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Capture loop
+# Phase 0: cover-based window resize
 # ---------------------------------------------------------------------------
 
 
-def _run_capture(
-    config: CaptureConfig,
-    *,
-    pages_to_retry: list[int],
-    key_code: int,
-) -> None:
-    """Inner capture loop; separated for testability."""
-    config.ensure_dirs()
+def _phase0_resize_window(window: KindleWindow) -> tuple[int, int] | None:
+    """Measure the cover page and resize the Kindle window to match.
+
+    Why this exists
+    ---------------
+    Kindle for Mac may open at an arbitrary window width.  If the window is
+    wider than the book's natural page width the side chrome (dark gutters)
+    wastes pixels and slightly changes the scale of the captured content.
+    Resizing the window so its content area exactly matches the book width
+    ensures every page is captured at a consistent pixel density.
+
+    How it works
+    ------------
+    1. Capture the cover frame (user must already be on the cover page).
+    2. Strip the macOS title bar (Sobel scan, top 60 rows only).
+    3. Call _detect_by_brightness: Kindle wraps the cover in near-black
+       chrome (pixel value ~16-17); the page itself is brighter (≥ 20).
+       Threshold at 20 → morphological close → largest contour = page rect.
+    4. Compute the logical window width that matches the page pixel width at
+       the current HiDPI scale factor, then call resize_kindle_window.
+    5. Sleep 1.5 s for Kindle to reflow the content at the new size.
+
+    Returns
+    -------
+    (orig_w, orig_h) tuple if the window was resized (caller must restore),
+    or None if the cover rect was not detected or an error occurred.
+
+    Failure handling
+    ----------------
+    Any exception is caught and logged as a warning so the capture loop can
+    continue at the current window size.  A failed Phase 0 does not abort
+    the run — it only means all pages may have a slightly inconsistent width.
+    """
+    from kindle_pdf_capture.cropper import _detect_by_brightness
 
     log = logging.getLogger(__name__)
-
-    check_accessibility()
-
-    window = find_kindle_window()
-    focus_window(window)
-
-    # --- Phase 0: detect cover page rect, resize window to match ---
-    # Runs before the capture loop so the window width is fixed for all pages.
-    # Requires the cover page (dark-chrome bordered) to be visible in Kindle.
-    orig_window_size: tuple[int, int] | None = None
     try:
-        from kindle_pdf_capture.cropper import _detect_by_brightness
-
         cover_frame = capture_window(window)
 
-        # Strip the macOS title bar before measuring the cover page rect.
-        # Use a 60-row search window so Kindle chrome elements (header bands,
-        # divider lines below y=60) are not mistaken for the title bar boundary.
+        # Scan only the top 60 rows so that Kindle header elements
+        # (title band at ~y=110, divider at ~y=126) are never mistaken
+        # for the macOS title bar boundary.
         titlebar_y = _find_titlebar_bottom(cover_frame, search_h=60)
         cropped_cover = cover_frame[titlebar_y:] if titlebar_y > 0 else cover_frame
         log.info(
@@ -100,27 +139,189 @@ def _run_capture(
         )
 
         cover_region = _detect_by_brightness(cropped_cover, margin=0, min_area_ratio=0.10)
-        if cover_region is not None:
-            scale_factor = cover_frame.shape[1] / window.width
-            target_logical_w = round(cover_region.w / scale_factor)
-            target_logical_h = window.height
-            log.info(
-                "Cover page rect: %dpx wide (frame: %dpx, scale: %.1f). "
-                "Resizing window to %d logical px.",
-                cover_region.w,
-                cover_frame.shape[1],
-                scale_factor,
-                target_logical_w,
-            )
-            orig_window_size = resize_kindle_window(
-                window, target_width=target_logical_w, target_height=target_logical_h
-            )
-            # Wait for Kindle to reflow at the new window size
-            time.sleep(1.5)
-        else:
+        if cover_region is None:
             log.info("Cover page rect not detected; skipping window resize.")
+            return None
+
+        # scale_factor: physical pixels per logical point (e.g. 2.0 on Retina)
+        scale_factor = cover_frame.shape[1] / window.width
+        target_logical_w = round(cover_region.w / scale_factor)
+        target_logical_h = window.height
+        log.info(
+            "Cover page rect: %dpx wide (frame: %dpx, scale: %.1f). "
+            "Resizing window to %d logical px.",
+            cover_region.w,
+            cover_frame.shape[1],
+            scale_factor,
+            target_logical_w,
+        )
+        orig_window_size = resize_kindle_window(
+            window, target_width=target_logical_w, target_height=target_logical_h
+        )
+        # Wait for Kindle to reflow at the new window size
+        time.sleep(1.5)
+        return orig_window_size
+
     except Exception as exc:
         log.warning("Cover-based window resize failed: %s — continuing at current size.", exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Crop-lock helper
+# ---------------------------------------------------------------------------
+
+
+def _apply_crop_lock(
+    region,
+    frame,
+    titlebar_y: int,
+    locked_crop_y: int | None,
+) -> tuple[object, int | None]:
+    """Enforce a stable crop y-coordinate across reading-mode pages.
+
+    Why this exists
+    ---------------
+    _find_header_bottom uses row-level standard-deviation heuristics to find
+    the bottom of the Kindle book-title text block.  The detected y can vary
+    by a few pixels between frames (font anti-aliasing, sub-pixel rendering).
+    If each page is cropped at a different y the resulting PDF pages have
+    slightly different heights, which causes layout jumps when reading.
+
+    Locking strategy
+    ----------------
+    - A page is "reading mode" when region.w == frame width AND
+      region.y > titlebar_y (i.e. the Kindle header band was also stripped,
+      not just the macOS title bar).
+    - On the *first* such page, record region.y as locked_crop_y.
+    - On subsequent pages, if region.y != locked_crop_y, clamp it back to
+      locked_crop_y and adjust h so the bottom of the frame is unchanged.
+    - Cover/image pages (region.y == titlebar_y) are NOT locked — they
+      intentionally include the full frame below the title bar.
+
+    Parameters
+    ----------
+    region      : ContentRegion returned by detect_content_region.
+    frame       : The raw BGR frame (used for shape).
+    titlebar_y  : Bottom of the macOS title bar in this frame.
+    locked_crop_y : Currently locked y, or None if not yet set.
+
+    Returns
+    -------
+    (region, locked_crop_y) — region may be a new ContentRegion with the
+    clamped y; locked_crop_y may be newly set.
+    """
+    log = logging.getLogger(__name__)
+
+    is_reading_mode_page = region.w == frame.shape[1] and region.y > titlebar_y
+    if not is_reading_mode_page:
+        return region, locked_crop_y
+
+    if locked_crop_y is None:
+        locked_crop_y = region.y
+        log.debug("Locked crop y=%d from first reading-mode page.", locked_crop_y)
+    elif region.y != locked_crop_y:
+        region = region.__class__(
+            x=region.x,
+            y=locked_crop_y,
+            w=region.w,
+            h=frame.shape[0] - locked_crop_y,
+        )
+        log.debug("Crop y clamped from %d to locked %d.", region.y, locked_crop_y)
+
+    return region, locked_crop_y
+
+
+# ---------------------------------------------------------------------------
+# Single-page capture
+# ---------------------------------------------------------------------------
+
+
+def _capture_one_page(
+    page_num: int,
+    window: KindleWindow,
+    config: CaptureConfig,
+    session: CaptureSession,
+    locked_crop_y: int | None,
+) -> int | None:
+    """Capture, crop, normalise, and save one Kindle page.
+
+    Parameters
+    ----------
+    page_num     : 1-based page index.
+    window       : KindleWindow snapshot (pid, geometry).
+    config       : CaptureConfig with output paths and image settings.
+    session      : Active CaptureSession (used for output paths).
+    locked_crop_y: Currently locked reading-mode y, or None.
+
+    Returns
+    -------
+    Updated locked_crop_y (may be the same value or newly set).
+
+    Side effects
+    ------------
+    - Writes `cropped/page_XXXX.jpg` (and optionally `raw/page_XXXX.jpg`).
+    - Appends a PageResult to session.
+    """
+    log = logging.getLogger(__name__)
+
+    frame = capture_window(window)
+
+    if config.save_raw:
+        raw_path = session.raw_path(page_num)
+        save_jpeg(frame, raw_path, quality=config.jpeg_quality)
+
+    try:
+        region = detect_content_region(frame)
+
+        titlebar_y = _find_titlebar_bottom(frame, search_h=60)
+        region, locked_crop_y = _apply_crop_lock(region, frame, titlebar_y, locked_crop_y)
+
+        cropped = frame[region.slice()]
+        # Scale proportionally so all pages share the same pixels-per-unit ratio.
+        scale = config.resize_width / frame.shape[1]
+        target_w = max(1, round(region.w * scale))
+    except CropError as exc:
+        log.warning("Page %d crop failed: %s — using full frame.", page_num, exc)
+        cropped = frame
+        target_w = config.resize_width
+
+    normalised = normalize_image(cropped, resize_width=target_w)
+    cropped_path = session.cropped_path(page_num)
+    save_jpeg(normalised, cropped_path, quality=config.jpeg_quality)
+
+    session.record_result(
+        PageResult(page_num=page_num, status=PageStatus.OK, cropped_path=cropped_path)
+    )
+    log.debug("Page %d saved to %s", page_num, cropped_path)
+
+    return locked_crop_y
+
+
+# ---------------------------------------------------------------------------
+# Capture loop
+# ---------------------------------------------------------------------------
+
+
+def _run_capture(
+    config: CaptureConfig,
+    *,
+    pages_to_retry: list[int],
+    key_code: int,
+) -> None:
+    """Outer capture loop: Phase 0, page loop, PDF build, optional OCR.
+
+    Separated from the CLI handler for testability.
+    """
+    config.ensure_dirs()
+    log = logging.getLogger(__name__)
+
+    check_accessibility()
+    window = find_kindle_window()
+    focus_window(window)
+
+    # Phase 0: resize window to the cover page's natural width.
+    orig_window_size = _phase0_resize_window(window)
 
     session = CaptureSession(config)
 
@@ -129,14 +330,10 @@ def _run_capture(
         time.sleep(config.start_delay)
 
     page_num = 1
-    # Lock the crop y-coordinate after the first reading-mode page so all
-    # subsequent pages share the same height regardless of per-frame variance
-    # in _find_header_bottom.  None until the first reading-mode page is seen.
     locked_crop_y: int | None = None
 
     try:
         while not session.is_finished():
-            # If retrying, skip pages not in the retry list
             if pages_to_retry and page_num not in pages_to_retry:
                 page_num += 1
                 continue
@@ -151,77 +348,22 @@ def _run_capture(
 
             log.info("Capturing page %d …", page_num)
 
-            frame = capture_window(window)
+            locked_crop_y = _capture_one_page(page_num, window, config, session, locked_crop_y)
 
-            # Save raw if requested
-            if config.save_raw:
-                raw_path = session.raw_path(page_num)
-                save_jpeg(frame, raw_path, quality=config.jpeg_quality)
-
-            # Detect content region and crop
-            try:
-                region = detect_content_region(frame)
-
-                # For reading-mode pages (full-width rect with Kindle header
-                # stripped), lock the crop y on the first occurrence so all
-                # subsequent pages share the same height.
-                # Cover/image pages have region.y == _find_titlebar_bottom(frame)
-                # (only the macOS title bar removed); reading-mode pages have a
-                # larger y because the Kindle header band is also stripped.
-                # Distinguish dynamically: only lock when region.y exceeds the
-                # title-bar-only boundary measured from this frame.
-                titlebar_y = _find_titlebar_bottom(frame, search_h=60)
-                if region.w == frame.shape[1] and region.y > titlebar_y:
-                    if locked_crop_y is None:
-                        locked_crop_y = region.y
-                        log.debug("Locked crop y=%d from page %d.", locked_crop_y, page_num)
-                    elif region.y != locked_crop_y:
-                        region = region.__class__(
-                            x=region.x,
-                            y=locked_crop_y,
-                            w=region.w,
-                            h=frame.shape[0] - locked_crop_y,
-                        )
-
-                cropped = frame[region.slice()]
-                # Scale the cropped region proportionally to the raw frame width so
-                # that all pages share the same pixels-per-physical-unit ratio and
-                # text appears at a consistent size throughout the PDF.
-                scale = config.resize_width / frame.shape[1]
-                target_w = max(1, round(region.w * scale))
-            except CropError as exc:
-                log.warning("Page %d crop failed: %s — using full frame.", page_num, exc)
-                cropped = frame
-                target_w = config.resize_width
-
-            # Normalise and save
-            normalised = normalize_image(cropped, resize_width=target_w)
-            cropped_path = session.cropped_path(page_num)
-            save_jpeg(normalised, cropped_path, quality=config.jpeg_quality)
-
-            session.record_result(
-                PageResult(page_num=page_num, status=PageStatus.OK, cropped_path=cropped_path)
-            )
-            log.debug("Page %d saved to %s", page_num, cropped_path)
-
-            # Turn to next page, then wait for the new page to render
             send_page_turn_key(window.pid, key_code)
-            wait_result = wait_for_render(
-                capture_fn=lambda: capture_window(window),
-            )
+            wait_result = wait_for_render(capture_fn=lambda: capture_window(window))
             if wait_result.status == WaitStatus.TIMEOUT:
                 log.warning("Page %d: render timed out after %.1fs", page_num, wait_result.elapsed)
 
-            # Check for duplicate (end-of-book detection)
             next_frame = capture_window(window)
             session.record_duplicate(next_frame)
 
             page_num += 1
 
     finally:
-        # Always restore original window size, even if the loop exits via error.
-        # force=True because the KindleWindow snapshot still holds the pre-resize
-        # dimensions, so the normal size-equality check would skip the call.
+        # Restore the original window size even if the loop exits via error.
+        # force=True bypasses the size-equality guard in resize_kindle_window
+        # (the KindleWindow snapshot still holds pre-resize dimensions).
         if orig_window_size is not None:
             orig_w, orig_h = orig_window_size
             resize_kindle_window(window, target_width=orig_w, target_height=orig_h, force=True)
@@ -229,7 +371,6 @@ def _run_capture(
 
     save_session(config, session.results)
 
-    # Build PDF
     jpeg_paths = sorted((config.out_dir / "cropped").glob("page_*.jpg"))
     if not jpeg_paths:
         log.warning("No pages captured; skipping PDF build.")
@@ -241,7 +382,6 @@ def _run_capture(
     optimise_pdf(pdf_path, pdf_path)
     log.info("PDF saved to %s", pdf_path)
 
-    # Optional OCR
     if config.ocr:
         ocr_path = config.out_dir / "pdf" / "book_ocr.pdf"
         log.info("Running OCR (%s) …", config.ocr_lang)
