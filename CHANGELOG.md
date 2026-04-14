@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-14
+
+### Added
+
+- **Phase 0 window resize**: before capture begins, the cover page rect is
+  measured via brightness analysis and the Kindle window is resized to match,
+  so all body pages render at a consistent physical width with no per-page
+  reflow variance.
+- **Bilingual ready prompt**: CLI now prints an English/Japanese prompt asking
+  the user to navigate to the cover page before pressing Enter to start.
+- `_find_titlebar_bottom()` in cropper: Sobel Step 1 only — returns the bottom
+  edge of the macOS title bar without scanning the Kindle header band. Used as
+  a lightweight, image-derived reference y-coordinate.
+- `force` parameter on `resize_kindle_window()`: bypasses the size-equality
+  guard so the window restore call in `finally` always fires even when the
+  `KindleWindow` snapshot still holds the pre-resize dimensions.
+- Crop y-coordinate locking: the first reading-mode page's top edge is locked
+  and applied to all subsequent full-width pages, eliminating per-frame height
+  variance from `_find_header_bottom`.
+
+### Fixed
+
+- **CGImage reshape crash on Retina displays**: `CGWindowListCreateImage` pads
+  rows for memory alignment (`bytes_per_row` > `width * channels`). The raw
+  buffer is now reshaped using the actual stride and then sliced to the true
+  pixel width, preventing `numpy.reshape` from raising a size mismatch error.
+- **Cover page over-cropped after window resize**: after Phase 0 resizes the
+  Kindle window, Kindle reflows the cover into reading mode with no dark
+  chrome border, causing `_has_dark_border` to return False and
+  `_find_header_bottom` to treat the Kindle chrome as a header band (~589 px
+  stripped). Fixed by replacing the `_has_dark_border` dispatch with luminance
+  sampling immediately below the macOS title bar: dark mean → cover/image page
+  (return full frame from `titlebar_y`); bright mean → reading mode (also
+  strip header band).
+- **Window not restored after capture**: `KindleWindow` is an immutable
+  snapshot, so `window.width` still holds the original value after Phase 0
+  resizes the window. The `finally` block compared equal sizes and skipped the
+  osascript call. Fixed with `force=True` on the restore call.
+- **Inconsistent body page heights**: `_find_header_bottom` returned slightly
+  different y values per frame due to rendering variance (up to 44 px),
+  producing pages of unequal height. Fixed by locking the crop y from the
+  first reading-mode page dynamically (no hardcoded offsets).
+- `--start-delay` default changed from 3 to 0; the ready prompt replaces its
+  original "wait before starting" purpose.
+
+### Changed
+
+- Page-type discrimination replaced: `_has_dark_border` (checks for dark
+  pixels at the left edge) removed from `detect_content_region`. Now uses
+  luminance sampling below the macOS title bar — fully image-derived, no
+  fixed thresholds.
+- Phase 0 runs after the user presses Enter (post `click.pause()`), so Kindle
+  is guaranteed to be displaying the cover page when the measurement occurs.
+
 ## [0.2.0] - 2026-04-14
 
 ### Added
@@ -93,7 +147,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bilingual documentation (English and Japanese)
 - GitHub PR/issue templates, Dependabot, and security policy
 
-[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.2.0...v1.0.0
 [0.2.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.1...v0.1.2
