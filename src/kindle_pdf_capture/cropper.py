@@ -343,6 +343,7 @@ def detect_content_region(
     *,
     margin: int = 15,
     min_area_ratio: float = 0.20,
+    top_padding: int = 20,
 ) -> ContentRegion:
     """Detect the main text-body region in a Kindle screenshot.
 
@@ -368,6 +369,9 @@ def detect_content_region(
         margin: Pixels to expand the detected bounding box on each side.
         min_area_ratio: Minimum fraction of total image area a candidate
             must cover to be considered valid.
+        top_padding: Extra rows to keep above the content start when
+            returning a full-width reading-mode rect.  Provides a small
+            visual margin at the top of each cropped page.
 
     Returns:
         ContentRegion describing the detected body area.
@@ -390,8 +394,14 @@ def detect_content_region(
     # guarantees a consistent full-frame width for every reading-mode page.
     gray_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     if header_y > 0 and not _has_dark_border(gray_full):
-        logger.debug("Reading-mode page: returning full-width rect below header (y=%d).", header_y)
-        return ContentRegion(x=0, y=header_y, w=w_img, h=h_img - header_y)
+        content_y = max(0, header_y - top_padding)
+        logger.debug(
+            "Reading-mode page: returning full-width rect at y=%d (header_y=%d, padding=%d).",
+            content_y,
+            header_y,
+            top_padding,
+        )
+        return ContentRegion(x=0, y=content_y, w=w_img, h=h_img - content_y)
 
     region = _detect_by_brightness(body, margin=margin, min_area_ratio=min_area_ratio)
     if region is not None:
@@ -423,8 +433,13 @@ def detect_content_region(
     # This preserves the header-stripping benefit even when content detection
     # cannot isolate a precise bounding box.
     if header_y > 0:
-        logger.debug("Both passes failed; returning full area below header (y=%d).", header_y)
-        return ContentRegion(x=0, y=header_y, w=w_img, h=h_img - header_y)
+        content_y = max(0, header_y - top_padding)
+        logger.debug(
+            "Both passes failed; returning full area below header (y=%d, padding=%d).",
+            header_y,
+            top_padding,
+        )
+        return ContentRegion(x=0, y=content_y, w=w_img, h=h_img - content_y)
 
     raise CropError("Could not detect a content region via brightness or edge detection.")
 

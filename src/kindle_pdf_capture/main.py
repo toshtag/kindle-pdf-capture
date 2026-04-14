@@ -42,6 +42,7 @@ from kindle_pdf_capture.window_capture import (
     WindowCaptureError,
     capture_window,
     find_kindle_window,
+    resize_kindle_window,
 )
 
 console = Console(stderr=True)
@@ -76,6 +77,43 @@ def _run_capture(
 
     window = find_kindle_window()
     focus_window(window)
+
+    # --- Phase 0: detect cover page rect, resize window to match ---
+    # Capture the cover page to measure the book page width (the bright rect
+    # inside the dark Kindle chrome).  Then resize the window so the chrome
+    # width stays the same but the total width equals the cover page width,
+    # making every subsequent body page the same logical width.
+    orig_window_size: tuple[int, int] | None = None
+    try:
+        cover_frame = capture_window(window)
+        cover_region = detect_content_region(cover_frame)
+        chrome_w = cover_frame.shape[1] - cover_region.w  # pixels used by chrome
+        target_w = cover_region.w + chrome_w  # = frame width after removing extra chrome
+        # Only resize if body pages would be wider than the cover page rect.
+        # In practice cover_region.w < frame_w, so target_w == frame_w here;
+        # the real resize happens because we want cover_region.w == body page width,
+        # i.e. window width = cover_region.w (point units = pixels / scale_factor).
+        # Accessibility API works in logical (point) units; the Retina scale factor
+        # is already embedded in window.width (which is in logical pixels from CGWindow).
+        # Logical window width that makes body pages == cover_region.w:
+        scale_factor = cover_frame.shape[1] / window.width  # e.g. 2 for Retina
+        target_logical_w = round(cover_region.w / scale_factor)
+        target_logical_h = window.height  # keep height unchanged
+        log.info(
+            "Cover page rect: %dpx wide (frame: %dpx, scale: %.1f). "
+            "Resizing window to %d logical px.",
+            cover_region.w,
+            cover_frame.shape[1],
+            scale_factor,
+            target_logical_w,
+        )
+        orig_window_size = resize_kindle_window(
+            window, target_width=target_logical_w, target_height=target_logical_h
+        )
+        # Wait for the window and Kindle layout to settle after resize
+        time.sleep(1.0)
+    except Exception as exc:
+        log.warning("Cover-based window resize failed: %s — continuing at current size.", exc)
 
     session = CaptureSession(config)
 
@@ -147,6 +185,12 @@ def _run_capture(
         page_num += 1
 
     save_session(config, session.results)
+
+    # Restore original window size if it was resized
+    if orig_window_size is not None:
+        orig_w, orig_h = orig_window_size
+        resize_kindle_window(window, target_width=orig_w, target_height=orig_h)
+        log.info("Kindle window restored to original size (%dx%d).", orig_w, orig_h)
 
     # Build PDF
     jpeg_paths = sorted((config.out_dir / "cropped").glob("page_*.jpg"))

@@ -146,6 +146,66 @@ def _is_content_page(bgr: np.ndarray) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Window resize (Accessibility API)
+# ---------------------------------------------------------------------------
+
+
+def _default_ax_resize(pid: int, width: int, height: int) -> None:
+    """Resize the frontmost window of *pid* via the macOS Accessibility API."""
+    try:
+        from ApplicationServices import (  # type: ignore[import]
+            AXUIElementCopyAttributeValue,
+            AXUIElementCreateApplication,
+            AXUIElementSetAttributeValue,
+            kAXSizeAttribute,
+            kAXWindowsAttribute,
+        )
+        from CoreFoundation import CGSizeMake  # type: ignore[import]
+
+        app = AXUIElementCreateApplication(pid)
+        err, windows = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute, None)
+        if err != 0 or not windows:
+            logger.warning("AX resize: could not list windows for pid=%d (err=%d)", pid, err)
+            return
+        win = windows[0]
+        new_size = CGSizeMake(width, height)
+        err2 = AXUIElementSetAttributeValue(win, kAXSizeAttribute, new_size)
+        if err2 != 0:
+            logger.warning("AX resize: SetAttributeValue failed (err=%d)", err2)
+    except Exception as exc:
+        logger.warning("AX resize failed: %s", exc)
+
+
+def resize_kindle_window(
+    window: KindleWindow,
+    *,
+    target_width: int,
+    target_height: int,
+    resize_fn: Callable[[int, int, int], None] = _default_ax_resize,
+) -> tuple[int, int]:
+    """Resize the Kindle window to *target_width* x *target_height*.
+
+    Returns the original (width, height) so the caller can restore it later.
+    If the window is already the target size, *resize_fn* is not called.
+
+    Args:
+        window: The KindleWindow to resize.
+        target_width: Desired window width in logical pixels.
+        target_height: Desired window height in logical pixels.
+        resize_fn: Injectable callable ``(pid, width, height) → None``
+            (default: Accessibility API).
+
+    Returns:
+        ``(original_width, original_height)`` tuple.
+    """
+    orig_w, orig_h = window.width, window.height
+    if orig_w != target_width or orig_h != target_height:
+        resize_fn(window.pid, target_width, target_height)
+        logger.debug("Window resized: %dx%d → %dx%d", orig_w, orig_h, target_width, target_height)
+    return orig_w, orig_h
+
+
+# ---------------------------------------------------------------------------
 # Default Quartz implementations (macOS only)
 # ---------------------------------------------------------------------------
 

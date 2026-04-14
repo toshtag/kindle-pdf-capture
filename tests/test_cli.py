@@ -526,6 +526,10 @@ class TestConsistentScale:
             patch("kindle_pdf_capture.main.build_pdf"),
             patch("kindle_pdf_capture.main.optimise_pdf"),
             patch("kindle_pdf_capture.main.time.sleep"),
+            patch(
+                "kindle_pdf_capture.main.resize_kindle_window",
+                return_value=(window.width, window.height),
+            ),
         ):
             runner.invoke(
                 cli,
@@ -587,7 +591,8 @@ class TestConsistentScale:
 
         window = _make_window()
         normalize_calls: list[int] = []
-        region_widths = [1100, 800]
+        # Phase 0 (cover detect) uses index 0; page 1 uses index 1; page 2 uses index 2.
+        region_widths_all = [1200, 1100, 800]
         call_count = 0
 
         from kindle_pdf_capture.cropper import ContentRegion
@@ -597,9 +602,9 @@ class TestConsistentScale:
 
         def _detect_region(*_a, **_kw):
             nonlocal detect_count
-            idx = min(detect_count, len(region_widths) - 1)
+            idx = min(detect_count, len(region_widths_all) - 1)
             detect_count += 1
-            return ContentRegion(x=50, y=50, w=region_widths[idx], h=700)
+            return ContentRegion(x=50, y=50, w=region_widths_all[idx], h=700)
 
         def _capture_normalize(img, *, resize_width):
             normalize_calls.append(resize_width)
@@ -626,6 +631,10 @@ class TestConsistentScale:
             patch("kindle_pdf_capture.main.build_pdf"),
             patch("kindle_pdf_capture.main.optimise_pdf"),
             patch("kindle_pdf_capture.main.time.sleep"),
+            patch(
+                "kindle_pdf_capture.main.resize_kindle_window",
+                return_value=(window.width, window.height),
+            ),
         ):
             runner.invoke(
                 cli,
@@ -643,8 +652,9 @@ class TestConsistentScale:
 
         assert len(normalize_calls) >= 2, "normalize_image was not called for 2 pages"
         w1, w2 = normalize_calls[0], normalize_calls[1]
-        expected_w1 = round(region_widths[0] * scale)
-        expected_w2 = round(region_widths[1] * scale)
+        # Pages 1 and 2 use region_widths_all[1] and [2]
+        expected_w1 = round(region_widths_all[1] * scale)
+        expected_w2 = round(region_widths_all[2] * scale)
         assert w1 == expected_w1, f"Page 1: expected {expected_w1}, got {w1}"
         assert w2 == expected_w2, f"Page 2: expected {expected_w2}, got {w2}"
 
