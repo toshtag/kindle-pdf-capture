@@ -40,7 +40,7 @@ def run_ocr(
     dst: Path,
     *,
     lang: str = "jpn+eng",
-    optimize: int = 2,
+    optimize: int = 1,
 ) -> OcrResult:
     """Run ocrmypdf on *src* and write the result to *dst*.
 
