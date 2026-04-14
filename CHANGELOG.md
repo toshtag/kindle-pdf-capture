@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-14
+
+### Added
+
+- `_find_header_bottom()` in cropper: detects and strips macOS title bar,
+  Kindle book-title header, and horizontal divider line from captures using
+  image analysis (no fixed coordinates).
+- `--pdf-dpi` CLI option (default 300) to control PDF page sizing. At 300
+  DPI, 1800 px maps to 6 inches — a natural book-page width.
+- Expanded README with feature list and practical usage examples.
+- `--direction` and `--pdf-dpi` added to English and Japanese usage docs.
+
+### Fixed
+
+- PDF pages were excessively large (~25 inches wide) due to missing DPI
+  layout. Pages are now sized for comfortable reading at 100% zoom.
+- Captured images included macOS window chrome (title bar, traffic-light
+  buttons) and Kindle header (book title, divider line). These are now
+  automatically stripped before content-region detection.
+
+### Changed
+
+- Architecture docs updated to reflect the corrected capture-loop order
+  (capture → header strip → crop → normalize → page turn → wait).
+
 ## [0.1.3] - 2026-04-13
 
 ### Added
@@ -68,7 +93,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bilingual documentation (English and Japanese)
 - GitHub PR/issue templates, Dependabot, and security policy
 
-[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.0...v0.1.1
