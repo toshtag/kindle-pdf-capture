@@ -24,17 +24,18 @@ find_kindle_window()
   -> キャプチャ + コンテンツページ検証（輝度 + エッジ密度）
 
 各ページで:
-  wait_for_render()        # フレーム差分が安定するまでポーリング
-  capture_window()         # スクリーンショット取得
-  detect_content_region()  # 輪郭解析 → バウンディングボックス
-  normalize_image()        # リサイズ・白補正・シャープ化
-  save_jpeg()              # cropped/page_XXXX.jpg に保存
-  send_right_arrow()       # ページ送り
-  record_duplicate()       # 16x16 ダウンスケールの MD5 で終端検出
+  capture_window()           # スクリーンショット取得
+  _find_header_bottom()      # Kindle ヘッダー区切り線を検出
+  detect_content_region()    # ヘッダー除去後の画像で輪郭解析
+  normalize_image()          # リサイズ・白補正・シャープ化
+  save_jpeg()                # cropped/page_XXXX.jpg に保存
+  send_page_turn_key()       # ページ送り（左 or 右）
+  wait_for_render()          # フレーム差分が安定するまでポーリング
+  record_duplicate()         # 16x16 ダウンスケールの MD5 で終端検出
 
-build_pdf()                # img2pdf: JPEG → PDF
-optimise_pdf()             # pikepdf: ストリーム圧縮、アトミック上書き
-run_ocr()                  # ocrmypdf サブプロセス（任意）
+build_pdf(dpi=300)           # img2pdf: JPEG → PDF（書籍サイズ）
+optimise_pdf()               # pikepdf: ストリーム圧縮、アトミック上書き
+run_ocr()                    # ocrmypdf サブプロセス（任意）
 ```
 
 ## テスタビリティ設計
