@@ -641,7 +641,7 @@ class TestDetectContentRegionWithHeader:
         box, causing output width to vary from page to page.
         """
         img, content_start = _make_reading_mode_page()
-        h_img, w_img = img.shape[:2]
+        _h_img, w_img = img.shape[:2]
 
         region = detect_content_region(img)
 
