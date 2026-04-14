@@ -124,18 +124,6 @@ class TestDetectContentRegion:
         region = detect_content_region(img)
         assert isinstance(region, ContentRegion)
 
-    def test_margin_applied(self) -> None:
-        """detect_content_region accepts an optional margin parameter."""
-        img = _make_white_canvas(1200, 900)
-        img = _draw_text_block(img, x=200, y=150, w=800, h=600)
-
-        r_no_margin = detect_content_region(img, margin=0)
-        r_with_margin = detect_content_region(img, margin=20)
-
-        # With margin, region should be at least as large
-        assert r_with_margin.x <= r_no_margin.x
-        assert r_with_margin.y <= r_no_margin.y
-
     def test_accepts_bgr_array(self) -> None:
         """Input must be a uint8 BGR ndarray (standard OpenCV format)."""
         img = _make_white_canvas()
@@ -151,24 +139,26 @@ class TestDetectContentRegion:
 
 
 class TestDetectContentRegionEdgeCases:
-    def test_blank_image_raises_crop_error(self) -> None:
-        """A completely white image has no detectable content."""
+    def test_blank_image_returns_full_frame(self) -> None:
+        """A completely white image: no title bar detected, returns full frame."""
         img = _make_white_canvas()
-        with pytest.raises(CropError):
-            detect_content_region(img)
+        region = detect_content_region(img)
+        assert region.x == 0
+        assert region.y == 0
+        assert region.w == 1200
+        assert region.h == 900
 
     def test_all_black_image_raises_crop_error(self) -> None:
         img = np.zeros((900, 1200, 3), dtype=np.uint8)
         with pytest.raises(CropError):
             detect_content_region(img)
 
-    def test_region_clipped_to_image_bounds(self) -> None:
-        """Margin must not produce a region outside the image."""
+    def test_region_within_image_bounds(self) -> None:
+        """Returned region must be within image bounds."""
         img = _make_white_canvas(1200, 900)
-        # Text almost touching every edge
         img = _draw_text_block(img, x=2, y=2, w=1196, h=896)
 
-        region = detect_content_region(img, margin=50)
+        region = detect_content_region(img)
 
         assert region.x >= 0
         assert region.y >= 0
