@@ -24,7 +24,7 @@ You have `--start-delay` seconds (default 3) to switch focus to Kindle before ca
 | `--pdf-dpi N` | 300 | DPI for PDF page sizing (300 maps 1800 px to 6 inches) |
 | `--ocr` | off | Run OCR on the assembled PDF |
 | `--ocr-lang LANG` | `jpn+eng` | Tesseract language string |
-| `--ocr-optimize N` | 2 | OCR optimization level 0-3 |
+| `--ocr-optimize N` | 1 | OCR optimization level 0-3 |
 | `--retry-failed` | off | Re-capture pages from `logs/failed_pages.json` |
 | `--debug` | off | Enable debug logging |
 

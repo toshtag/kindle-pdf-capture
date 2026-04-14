@@ -24,7 +24,7 @@ kpc --out output/my-book
 | `--pdf-dpi N` | 300 | PDF ページサイズの DPI（300 で 1800 px = 6 インチ幅） |
 | `--ocr` | オフ | 生成した PDF に OCR を実行 |
 | `--ocr-lang LANG` | `jpn+eng` | Tesseract の言語指定 |
-| `--ocr-optimize N` | 2 | OCR 最適化レベル（0-3） |
+| `--ocr-optimize N` | 1 | OCR 最適化レベル（0-3） |
 | `--retry-failed` | オフ | `logs/failed_pages.json` のページのみ再キャプチャ |
 | `--debug` | オフ | デバッグログを有効化 |
 
