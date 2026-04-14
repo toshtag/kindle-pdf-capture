@@ -335,19 +335,61 @@ def detect_content_region(
 ) -> ContentRegion:
     """Detect the crop region for a Kindle screenshot.
 
-    Strategy:
+    Decision flow
+    -------------
+    The function walks through three distinct page types and returns the
+    tightest rectangle that includes all book content without any UI chrome.
 
-    1. Locate the macOS title bar bottom edge by scanning the top 60 rows
-       with Sobel Y.
-    2. Check the brightness below the title bar.  If dark (mean < 200),
-       the page has no Kindle header — return the full frame from
-       titlebar_y downward.
-    3. If bright (reading mode), call _find_header_bottom to locate the
-       end of the book-title text block and return the full frame from
-       that point downward (excluding the title text from the crop).
-    4. If no header bottom is detected (header_y == 0), return the full
-       frame from titlebar_y — this handles cover/image pages that are
-       bright but have no title text.
+    .. code-block:: text
+
+        [frame]
+           │
+           ▼
+        _find_titlebar_bottom(search_h=60)
+           │   Sobel Y scan of top 60 rows only.
+           │   Returns the y just below the macOS title bar (~y=55).
+           │   Using a fixed 60-row window prevents Kindle header elements
+           │   (title text at ~y=110, divider at ~y=126) from being
+           │   mistaken for the title bar boundary.
+           │
+           ├─ guard: gray_full.max() <= 20 ──► CropError (all-black frame)
+           │
+           ▼
+        below_titlebar_mean  (mean of rows [titlebar_y : titlebar_y+10])
+           │
+           ├─ mean < 200  ──► COVER / IMAGE PAGE
+           │                  Dark Kindle chrome surrounds the book page.
+           │                  Return full frame from titlebar_y downward.
+           │                  ContentRegion(x=0, y=titlebar_y, w=w, h=h-titlebar_y)
+           │
+           └─ mean >= 200 ──► READING-MODE PAGE (light-gray Kindle header)
+                              │
+                              ▼
+                           _find_header_bottom(bgr)
+                              │   Scans up to 100 rows below titlebar_y for the
+                              │   book-title text block (row std >= 10), then
+                              │   returns the first quiet row (std < 5) after it.
+                              │
+                              ├─ header_y > 0 ──► NORMAL READING PAGE
+                              │                   Kindle header band fully detected.
+                              │                   content_y = max(titlebar_y, header_y - top_padding)
+                              │                   ContentRegion(x=0, y=content_y, w=w, h=h-content_y)
+                              │
+                              └─ header_y == 0 ──► BRIGHT COVER / NO-HEADER PAGE
+                                                   Passes mean >= 200 but has no title text
+                                                   (e.g. a white cover illustration).
+                                                   Fall back to titlebar_y — same as cover path.
+                                                   ContentRegion(x=0, y=titlebar_y, w=w, h=h-titlebar_y)
+
+    Why the mean-200 threshold?
+    ---------------------------
+    After Phase 0 resizes the window, the Kindle chrome around the cover
+    disappears (dark gutters reflow away).  We can no longer rely on a dark
+    border to distinguish covers from reading-mode pages.  Instead we check
+    the first 10 rows below the macOS title bar:
+      - Reading-mode header background: very light gray (mean ~230-250).
+      - Cover chrome / dark illustration: darker (mean < 200).
+    The threshold 200 sits safely between these two bands for all tested books.
 
     Args:
         bgr: uint8 BGR ndarray (OpenCV format).
