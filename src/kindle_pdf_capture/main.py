@@ -17,7 +17,7 @@ import click
 from rich.console import Console
 from rich.logging import RichHandler
 
-from kindle_pdf_capture.cropper import CropError, _has_dark_border, detect_content_region
+from kindle_pdf_capture.cropper import CropError, detect_content_region
 from kindle_pdf_capture.normalize import normalize_image, save_jpeg
 from kindle_pdf_capture.ocr import run_ocr
 from kindle_pdf_capture.orchestrator import (
@@ -83,55 +83,42 @@ def _run_capture(
     # Requires the cover page (dark-chrome bordered) to be visible in Kindle.
     orig_window_size: tuple[int, int] | None = None
     try:
-        import cv2 as _cv2
+        from kindle_pdf_capture.cropper import _detect_by_brightness, _find_header_bottom
 
         cover_frame = capture_window(window)
-        cover_gray = _cv2.cvtColor(cover_frame, _cv2.COLOR_BGR2GRAY)
-        h_cf, w_cf = cover_gray.shape
-        bw = min(20, w_cf // 4, h_cf // 4)
-        edge_means = {
-            "left": float(cover_gray[:, :bw].mean()),
-            "right": float(cover_gray[:, w_cf - bw :].mean()),
-            "top": float(cover_gray[:bw, :].mean()),
-            "bottom": float(cover_gray[h_cf - bw :, :].mean()),
-        }
+
+        # Strip the macOS title bar before measuring the cover page rect.
+        # The title bar is white and causes _detect_by_brightness to treat the
+        # entire frame as the "page" bounding box.
+        header_y = _find_header_bottom(cover_frame)
+        cropped_cover = cover_frame[header_y:] if header_y > 0 else cover_frame
         log.info(
-            "Cover frame %dx%d. Edge mean luminance — L:%.1f R:%.1f T:%.1f B:%.1f",
-            w_cf,
-            h_cf,
-            edge_means["left"],
-            edge_means["right"],
-            edge_means["top"],
-            edge_means["bottom"],
+            "Cover frame %dx%d. Title bar bottom: y=%d.",
+            cover_frame.shape[1],
+            cover_frame.shape[0],
+            header_y,
         )
 
-        if _has_dark_border(cover_gray):
-            from kindle_pdf_capture.cropper import _detect_by_brightness
-
-            cover_region = _detect_by_brightness(cover_frame, margin=0, min_area_ratio=0.10)
-            if cover_region is not None:
-                scale_factor = cover_frame.shape[1] / window.width
-                target_logical_w = round(cover_region.w / scale_factor)
-                target_logical_h = window.height
-                log.info(
-                    "Cover page rect: %dpx wide (frame: %dpx, scale: %.1f). "
-                    "Resizing window to %d logical px.",
-                    cover_region.w,
-                    cover_frame.shape[1],
-                    scale_factor,
-                    target_logical_w,
-                )
-                orig_window_size = resize_kindle_window(
-                    window, target_width=target_logical_w, target_height=target_logical_h
-                )
-                # Wait for Kindle to reflow at the new window size
-                time.sleep(1.5)
-            else:
-                log.info("Cover brightness detection returned nothing; skipping resize.")
-        else:
+        cover_region = _detect_by_brightness(cropped_cover, margin=0, min_area_ratio=0.10)
+        if cover_region is not None:
+            scale_factor = cover_frame.shape[1] / window.width
+            target_logical_w = round(cover_region.w / scale_factor)
+            target_logical_h = window.height
             log.info(
-                "Cover frame has no dark chrome border (threshold=20, ratio>0.80); skipping resize."
+                "Cover page rect: %dpx wide (frame: %dpx, scale: %.1f). "
+                "Resizing window to %d logical px.",
+                cover_region.w,
+                cover_frame.shape[1],
+                scale_factor,
+                target_logical_w,
             )
+            orig_window_size = resize_kindle_window(
+                window, target_width=target_logical_w, target_height=target_logical_h
+            )
+            # Wait for Kindle to reflow at the new window size
+            time.sleep(1.5)
+        else:
+            log.info("Cover page rect not detected; skipping window resize.")
     except Exception as exc:
         log.warning("Cover-based window resize failed: %s — continuing at current size.", exc)
 
