@@ -17,7 +17,7 @@ import click
 from rich.console import Console
 from rich.logging import RichHandler
 
-from kindle_pdf_capture.cropper import CropError, detect_content_region
+from kindle_pdf_capture.cropper import CropError, _has_dark_border, detect_content_region
 from kindle_pdf_capture.normalize import normalize_image, save_jpeg
 from kindle_pdf_capture.ocr import run_ocr
 from kindle_pdf_capture.orchestrator import (
@@ -79,39 +79,41 @@ def _run_capture(
     focus_window(window)
 
     # --- Phase 0: detect cover page rect, resize window to match ---
-    # Capture the cover page to measure the book page width (the bright rect
-    # inside the dark Kindle chrome).  Then resize the window so the chrome
-    # width stays the same but the total width equals the cover page width,
-    # making every subsequent body page the same logical width.
+    # Capture the cover (dark-chrome bordered) page to measure the book page
+    # width, then resize the window so all body pages render at the same width.
+    # Only resize when the current frame actually shows a dark-chrome layout;
+    # if Kindle is already showing a body page (no chrome), skip the resize.
     orig_window_size: tuple[int, int] | None = None
     try:
+        import cv2 as _cv2
+
         cover_frame = capture_window(window)
-        cover_region = detect_content_region(cover_frame)
-        chrome_w = cover_frame.shape[1] - cover_region.w  # pixels used by chrome
-        target_w = cover_region.w + chrome_w  # = frame width after removing extra chrome
-        # Only resize if body pages would be wider than the cover page rect.
-        # In practice cover_region.w < frame_w, so target_w == frame_w here;
-        # the real resize happens because we want cover_region.w == body page width,
-        # i.e. window width = cover_region.w (point units = pixels / scale_factor).
-        # Accessibility API works in logical (point) units; the Retina scale factor
-        # is already embedded in window.width (which is in logical pixels from CGWindow).
-        # Logical window width that makes body pages == cover_region.w:
-        scale_factor = cover_frame.shape[1] / window.width  # e.g. 2 for Retina
-        target_logical_w = round(cover_region.w / scale_factor)
-        target_logical_h = window.height  # keep height unchanged
-        log.info(
-            "Cover page rect: %dpx wide (frame: %dpx, scale: %.1f). "
-            "Resizing window to %d logical px.",
-            cover_region.w,
-            cover_frame.shape[1],
-            scale_factor,
-            target_logical_w,
-        )
-        orig_window_size = resize_kindle_window(
-            window, target_width=target_logical_w, target_height=target_logical_h
-        )
-        # Wait for the window and Kindle layout to settle after resize
-        time.sleep(1.0)
+        cover_gray = _cv2.cvtColor(cover_frame, _cv2.COLOR_BGR2GRAY)
+        if _has_dark_border(cover_gray):
+            from kindle_pdf_capture.cropper import _detect_by_brightness
+
+            cover_region = _detect_by_brightness(cover_frame, margin=0, min_area_ratio=0.10)
+            if cover_region is not None:
+                scale_factor = cover_frame.shape[1] / window.width
+                target_logical_w = round(cover_region.w / scale_factor)
+                target_logical_h = window.height
+                log.info(
+                    "Cover page rect: %dpx wide (frame: %dpx, scale: %.1f). "
+                    "Resizing window to %d logical px.",
+                    cover_region.w,
+                    cover_frame.shape[1],
+                    scale_factor,
+                    target_logical_w,
+                )
+                orig_window_size = resize_kindle_window(
+                    window, target_width=target_logical_w, target_height=target_logical_h
+                )
+                # Wait for Kindle to reflow at the new window size
+                time.sleep(1.5)
+            else:
+                log.debug("Cover brightness detection returned nothing; skipping resize.")
+        else:
+            log.debug("First frame has no dark chrome border; skipping cover-based resize.")
     except Exception as exc:
         log.warning("Cover-based window resize failed: %s — continuing at current size.", exc)
 
@@ -123,74 +125,76 @@ def _run_capture(
 
     page_num = 1
 
-    while not session.is_finished():
-        # If retrying, skip pages not in the retry list
-        if pages_to_retry and page_num not in pages_to_retry:
-            page_num += 1
-            continue
+    try:
+        while not session.is_finished():
+            # If retrying, skip pages not in the retry list
+            if pages_to_retry and page_num not in pages_to_retry:
+                page_num += 1
+                continue
 
-        if session.should_skip(page_num):
-            log.info("Page %d already captured — skipping.", page_num)
+            if session.should_skip(page_num):
+                log.info("Page %d already captured — skipping.", page_num)
+                session.record_result(
+                    PageResult(page_num=page_num, status=PageStatus.SKIPPED, cropped_path=None)
+                )
+                page_num += 1
+                continue
+
+            log.info("Capturing page %d …", page_num)
+
+            frame = capture_window(window)
+
+            # Save raw if requested
+            if config.save_raw:
+                raw_path = session.raw_path(page_num)
+                save_jpeg(frame, raw_path, quality=config.jpeg_quality)
+
+            # Detect content region and crop
+            try:
+                region = detect_content_region(frame)
+                cropped = frame[region.slice()]
+                # Scale the cropped region proportionally to the raw frame width so
+                # that all pages share the same pixels-per-physical-unit ratio and
+                # text appears at a consistent size throughout the PDF.
+                scale = config.resize_width / frame.shape[1]
+                target_w = max(1, round(region.w * scale))
+            except CropError as exc:
+                log.warning("Page %d crop failed: %s — using full frame.", page_num, exc)
+                cropped = frame
+                target_w = config.resize_width
+
+            # Normalise and save
+            normalised = normalize_image(cropped, resize_width=target_w)
+            cropped_path = session.cropped_path(page_num)
+            save_jpeg(normalised, cropped_path, quality=config.jpeg_quality)
+
             session.record_result(
-                PageResult(page_num=page_num, status=PageStatus.SKIPPED, cropped_path=None)
+                PageResult(page_num=page_num, status=PageStatus.OK, cropped_path=cropped_path)
             )
+            log.debug("Page %d saved to %s", page_num, cropped_path)
+
+            # Turn to next page, then wait for the new page to render
+            send_page_turn_key(window.pid, key_code)
+            wait_result = wait_for_render(
+                capture_fn=lambda: capture_window(window),
+            )
+            if wait_result.status == WaitStatus.TIMEOUT:
+                log.warning("Page %d: render timed out after %.1fs", page_num, wait_result.elapsed)
+
+            # Check for duplicate (end-of-book detection)
+            next_frame = capture_window(window)
+            session.record_duplicate(next_frame)
+
             page_num += 1
-            continue
 
-        log.info("Capturing page %d …", page_num)
-
-        frame = capture_window(window)
-
-        # Save raw if requested
-        if config.save_raw:
-            raw_path = session.raw_path(page_num)
-            save_jpeg(frame, raw_path, quality=config.jpeg_quality)
-
-        # Detect content region and crop
-        try:
-            region = detect_content_region(frame)
-            cropped = frame[region.slice()]
-            # Scale the cropped region proportionally to the raw frame width so
-            # that all pages share the same pixels-per-physical-unit ratio and
-            # text appears at a consistent size throughout the PDF.
-            scale = config.resize_width / frame.shape[1]
-            target_w = max(1, round(region.w * scale))
-        except CropError as exc:
-            log.warning("Page %d crop failed: %s — using full frame.", page_num, exc)
-            cropped = frame
-            target_w = config.resize_width
-
-        # Normalise and save
-        normalised = normalize_image(cropped, resize_width=target_w)
-        cropped_path = session.cropped_path(page_num)
-        save_jpeg(normalised, cropped_path, quality=config.jpeg_quality)
-
-        session.record_result(
-            PageResult(page_num=page_num, status=PageStatus.OK, cropped_path=cropped_path)
-        )
-        log.debug("Page %d saved to %s", page_num, cropped_path)
-
-        # Turn to next page, then wait for the new page to render
-        send_page_turn_key(window.pid, key_code)
-        wait_result = wait_for_render(
-            capture_fn=lambda: capture_window(window),
-        )
-        if wait_result.status == WaitStatus.TIMEOUT:
-            log.warning("Page %d: render timed out after %.1fs", page_num, wait_result.elapsed)
-
-        # Check for duplicate (end-of-book detection)
-        next_frame = capture_window(window)
-        session.record_duplicate(next_frame)
-
-        page_num += 1
+    finally:
+        # Always restore original window size, even if the loop exits via error.
+        if orig_window_size is not None:
+            orig_w, orig_h = orig_window_size
+            resize_kindle_window(window, target_width=orig_w, target_height=orig_h)
+            log.info("Kindle window restored to original size (%dx%d).", orig_w, orig_h)
 
     save_session(config, session.results)
-
-    # Restore original window size if it was resized
-    if orig_window_size is not None:
-        orig_w, orig_h = orig_window_size
-        resize_kindle_window(window, target_width=orig_w, target_height=orig_h)
-        log.info("Kindle window restored to original size (%dx%d).", orig_w, orig_h)
 
     # Build PDF
     jpeg_paths = sorted((config.out_dir / "cropped").glob("page_*.jpg"))

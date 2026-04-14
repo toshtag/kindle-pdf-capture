@@ -591,8 +591,9 @@ class TestConsistentScale:
 
         window = _make_window()
         normalize_calls: list[int] = []
-        # Phase 0 (cover detect) uses index 0; page 1 uses index 1; page 2 uses index 2.
-        region_widths_all = [1200, 1100, 800]
+        # Phase 0 uses _detect_by_brightness directly (not detect_content_region).
+        # detect_content_region is only called for body pages: index 0=page1, index 1=page2.
+        region_widths_all = [1100, 800]
         call_count = 0
 
         from kindle_pdf_capture.cropper import ContentRegion
@@ -652,9 +653,9 @@ class TestConsistentScale:
 
         assert len(normalize_calls) >= 2, "normalize_image was not called for 2 pages"
         w1, w2 = normalize_calls[0], normalize_calls[1]
-        # Pages 1 and 2 use region_widths_all[1] and [2]
-        expected_w1 = round(region_widths_all[1] * scale)
-        expected_w2 = round(region_widths_all[2] * scale)
+        # Pages 1 and 2 use region_widths_all[0] and [1]
+        expected_w1 = round(region_widths_all[0] * scale)
+        expected_w2 = round(region_widths_all[1] * scale)
         assert w1 == expected_w1, f"Page 1: expected {expected_w1}, got {w1}"
         assert w2 == expected_w2, f"Page 2: expected {expected_w2}, got {w2}"
 
@@ -669,7 +670,12 @@ class TestWindowResizeForCoverMatch:
     subsequent body pages produce the same pixel width as the cover page rect."""
 
     def test_resize_called_before_capture_loop(self, tmp_path: Path) -> None:
-        """resize_kindle_window must be called once, before any page is captured."""
+        """resize_kindle_window must be called once, before any page is captured.
+
+        Phase 0 checks _has_dark_border to detect the cover, then calls
+        _detect_by_brightness to measure cover width. Both are mocked so the
+        test does not require a real dark-border frame.
+        """
         from kindle_pdf_capture.cropper import ContentRegion
         from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
         from kindle_pdf_capture.window_capture import KindleWindow
@@ -677,25 +683,15 @@ class TestWindowResizeForCoverMatch:
         runner = CliRunner()
         frame_w = 2240
         frame = _white_bgr(frame_w, 2358)
-        # Draw sparse text so detect_content_region can work
         frame[200:2000:20, 100 : frame_w - 100] = 30
 
         window = KindleWindow(pid=1, window_id=1, x=0, y=30, width=1120, height=1179)
 
         resize_calls: list[tuple] = []
 
-        # Cover: brightness pass returns page rect narrower than frame
+        # Cover page brightness rect (narrower than frame)
         cover_region = ContentRegion(x=100, y=60, w=900, h=2200)
-        # Body pages: full-width rect (reading mode)
         body_region = ContentRegion(x=0, y=183, w=frame_w, h=2175)
-
-        detect_count = 0
-
-        def _detect(*_a, **_kw):
-            nonlocal detect_count
-            r = cover_region if detect_count == 0 else body_region
-            detect_count += 1
-            return r
 
         with (
             patch("kindle_pdf_capture.main.check_accessibility"),
@@ -707,7 +703,17 @@ class TestWindowResizeForCoverMatch:
                 "kindle_pdf_capture.main.wait_for_render",
                 return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
             ),
-            patch("kindle_pdf_capture.main.detect_content_region", side_effect=_detect),
+            # Phase 0: mock dark border check to True so resize path is taken
+            patch("kindle_pdf_capture.main._has_dark_border", return_value=True),
+            # Phase 0: mock _detect_by_brightness to return cover_region
+            patch(
+                "kindle_pdf_capture.cropper._detect_by_brightness",
+                return_value=cover_region,
+            ),
+            patch(
+                "kindle_pdf_capture.main.detect_content_region",
+                return_value=body_region,
+            ),
             patch("kindle_pdf_capture.main.normalize_image", side_effect=lambda img, **_: img),
             patch("kindle_pdf_capture.main.save_jpeg"),
             patch("kindle_pdf_capture.main.build_pdf"),
@@ -743,13 +749,6 @@ class TestWindowResizeForCoverMatch:
 
         cover_region = ContentRegion(x=100, y=60, w=900, h=2200)
         body_region = ContentRegion(x=0, y=183, w=frame_w, h=2175)
-        detect_count = 0
-
-        def _detect(*_a, **_kw):
-            nonlocal detect_count
-            r = cover_region if detect_count == 0 else body_region
-            detect_count += 1
-            return r
 
         with (
             patch("kindle_pdf_capture.main.check_accessibility"),
@@ -761,7 +760,16 @@ class TestWindowResizeForCoverMatch:
                 "kindle_pdf_capture.main.wait_for_render",
                 return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
             ),
-            patch("kindle_pdf_capture.main.detect_content_region", side_effect=_detect),
+            # Phase 0: mock dark border check and _detect_by_brightness
+            patch("kindle_pdf_capture.main._has_dark_border", return_value=True),
+            patch(
+                "kindle_pdf_capture.cropper._detect_by_brightness",
+                return_value=cover_region,
+            ),
+            patch(
+                "kindle_pdf_capture.main.detect_content_region",
+                return_value=body_region,
+            ),
             patch("kindle_pdf_capture.main.normalize_image", side_effect=lambda img, **_: img),
             patch("kindle_pdf_capture.main.save_jpeg"),
             patch("kindle_pdf_capture.main.build_pdf"),
