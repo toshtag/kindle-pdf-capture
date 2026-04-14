@@ -176,17 +176,23 @@ def resize_kindle_window(
     *,
     target_width: int,
     target_height: int,
+    force: bool = False,
     resize_fn: Callable[[int, int, int], None] = _default_ax_resize,
 ) -> tuple[int, int]:
     """Resize the Kindle window to *target_width* x *target_height*.
 
     Returns the original (width, height) so the caller can restore it later.
-    If the window is already the target size, *resize_fn* is not called.
+    If the window is already the target size, *resize_fn* is not called unless
+    *force* is True.
 
     Args:
         window: The KindleWindow to resize.
         target_width: Desired window width in logical pixels.
         target_height: Desired window height in logical pixels.
+        force: Always call *resize_fn* even if the size appears unchanged.
+            Use this when restoring to the original size after a resize, since
+            the KindleWindow snapshot does not update to reflect intermediate
+            resizes.
         resize_fn: Injectable callable ``(pid, width, height) → None``
             (default: Accessibility API).
 
@@ -194,7 +200,7 @@ def resize_kindle_window(
         ``(original_width, original_height)`` tuple.
     """
     orig_w, orig_h = window.width, window.height
-    if orig_w != target_width or orig_h != target_height:
+    if force or orig_w != target_width or orig_h != target_height:
         resize_fn(window.pid, target_width, target_height)
         logger.debug("Window resized: %dx%d → %dx%d", orig_w, orig_h, target_width, target_height)
     return orig_w, orig_h

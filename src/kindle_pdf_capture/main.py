@@ -194,9 +194,11 @@ def _run_capture(
 
     finally:
         # Always restore original window size, even if the loop exits via error.
+        # force=True because the KindleWindow snapshot still holds the pre-resize
+        # dimensions, so the normal size-equality check would skip the call.
         if orig_window_size is not None:
             orig_w, orig_h = orig_window_size
-            resize_kindle_window(window, target_width=orig_w, target_height=orig_h)
+            resize_kindle_window(window, target_width=orig_w, target_height=orig_h, force=True)
             log.info("Kindle window restored to original size (%dx%d).", orig_w, orig_h)
 
     save_session(config, session.results)
