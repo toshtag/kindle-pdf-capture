@@ -647,3 +647,132 @@ class TestConsistentScale:
         expected_w2 = round(region_widths[1] * scale)
         assert w1 == expected_w1, f"Page 1: expected {expected_w1}, got {w1}"
         assert w2 == expected_w2, f"Page 2: expected {expected_w2}, got {w2}"
+
+
+# ---------------------------------------------------------------------------
+# Window resize to match cover page width
+# ---------------------------------------------------------------------------
+
+
+class TestWindowResizeForCoverMatch:
+    """The capture loop must resize the Kindle window before page 1 so that
+    subsequent body pages produce the same pixel width as the cover page rect."""
+
+    def test_resize_called_before_capture_loop(self, tmp_path: Path) -> None:
+        """resize_kindle_window must be called once, before any page is captured."""
+        from kindle_pdf_capture.cropper import ContentRegion
+        from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
+        from kindle_pdf_capture.window_capture import KindleWindow
+
+        runner = CliRunner()
+        frame_w = 2240
+        frame = _white_bgr(frame_w, 2358)
+        # Draw sparse text so detect_content_region can work
+        frame[200:2000:20, 100 : frame_w - 100] = 30
+
+        window = KindleWindow(pid=1, window_id=1, x=0, y=30, width=1120, height=1179)
+
+        resize_calls: list[tuple] = []
+
+        # Cover: brightness pass returns page rect narrower than frame
+        cover_region = ContentRegion(x=100, y=60, w=900, h=2200)
+        # Body pages: full-width rect (reading mode)
+        body_region = ContentRegion(x=0, y=183, w=frame_w, h=2175)
+
+        detect_count = 0
+
+        def _detect(*_a, **_kw):
+            nonlocal detect_count
+            r = cover_region if detect_count == 0 else body_region
+            detect_count += 1
+            return r
+
+        with (
+            patch("kindle_pdf_capture.main.check_accessibility"),
+            patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
+            patch("kindle_pdf_capture.main.focus_window"),
+            patch("kindle_pdf_capture.main.capture_window", return_value=frame),
+            patch("kindle_pdf_capture.main.send_page_turn_key"),
+            patch(
+                "kindle_pdf_capture.main.wait_for_render",
+                return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
+            ),
+            patch("kindle_pdf_capture.main.detect_content_region", side_effect=_detect),
+            patch("kindle_pdf_capture.main.normalize_image", side_effect=lambda img, **_: img),
+            patch("kindle_pdf_capture.main.save_jpeg"),
+            patch("kindle_pdf_capture.main.build_pdf"),
+            patch("kindle_pdf_capture.main.optimise_pdf"),
+            patch("kindle_pdf_capture.main.time.sleep"),
+            patch(
+                "kindle_pdf_capture.main.resize_kindle_window",
+                side_effect=lambda w, **kw: (resize_calls.append(kw), (w.width, w.height))[1],
+            ),
+        ):
+            runner.invoke(
+                cli,
+                ["--out", str(tmp_path / "out"), "--start-delay", "0", "--max-pages", "2"],
+            )
+
+        assert len(resize_calls) >= 1, "resize_kindle_window was never called"
+
+    def test_window_restored_after_capture(self, tmp_path: Path) -> None:
+        """resize_kindle_window must be called a second time to restore original size."""
+        from kindle_pdf_capture.cropper import ContentRegion
+        from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
+        from kindle_pdf_capture.window_capture import KindleWindow
+
+        runner = CliRunner()
+        frame_w = 2240
+        frame = _white_bgr(frame_w, 2358)
+        frame[200:2000:20, 100 : frame_w - 100] = 30
+
+        window = KindleWindow(pid=1, window_id=1, x=0, y=30, width=1120, height=1179)
+        orig_w, orig_h = window.width, window.height
+
+        resize_calls: list[dict] = []
+
+        cover_region = ContentRegion(x=100, y=60, w=900, h=2200)
+        body_region = ContentRegion(x=0, y=183, w=frame_w, h=2175)
+        detect_count = 0
+
+        def _detect(*_a, **_kw):
+            nonlocal detect_count
+            r = cover_region if detect_count == 0 else body_region
+            detect_count += 1
+            return r
+
+        with (
+            patch("kindle_pdf_capture.main.check_accessibility"),
+            patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
+            patch("kindle_pdf_capture.main.focus_window"),
+            patch("kindle_pdf_capture.main.capture_window", return_value=frame),
+            patch("kindle_pdf_capture.main.send_page_turn_key"),
+            patch(
+                "kindle_pdf_capture.main.wait_for_render",
+                return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
+            ),
+            patch("kindle_pdf_capture.main.detect_content_region", side_effect=_detect),
+            patch("kindle_pdf_capture.main.normalize_image", side_effect=lambda img, **_: img),
+            patch("kindle_pdf_capture.main.save_jpeg"),
+            patch("kindle_pdf_capture.main.build_pdf"),
+            patch("kindle_pdf_capture.main.optimise_pdf"),
+            patch("kindle_pdf_capture.main.time.sleep"),
+            patch(
+                "kindle_pdf_capture.main.resize_kindle_window",
+                side_effect=lambda w, **kw: (resize_calls.append(kw), (w.width, w.height))[1],
+            ),
+        ):
+            runner.invoke(
+                cli,
+                ["--out", str(tmp_path / "out"), "--start-delay", "0", "--max-pages", "2"],
+            )
+
+        # Last call must restore original dimensions
+        assert len(resize_calls) >= 2, "Expected at least 2 resize calls (resize + restore)"
+        last = resize_calls[-1]
+        assert last["target_width"] == orig_w, (
+            f"Restore width: expected {orig_w}, got {last['target_width']}"
+        )
+        assert last["target_height"] == orig_h, (
+            f"Restore height: expected {orig_h}, got {last['target_height']}"
+        )
