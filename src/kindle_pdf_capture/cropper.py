@@ -49,70 +49,64 @@ class CropError(RuntimeError):
 
 
 def _find_header_bottom(bgr: np.ndarray, *, search_fraction: float = 0.25) -> int:
-    """Return the y-coordinate just below the Kindle header divider line.
+    """Return the y-coordinate where book content starts, below the Kindle header.
 
-    Scans the top *search_fraction* of the image for a thin, full-width
-    horizontal dark line (the divider between Kindle chrome and book content).
+    Strategy:
+    1. Scan the top *search_fraction* of the image with a Sobel Y filter to
+       detect horizontal edges that span the full image width (including left
+       and right edge strips).  Such a full-width edge marks a UI boundary
+       (e.g. the line between the macOS title bar and the Kindle header area).
+    2. After the last full-width edge, skip any uniform rows (very low std)
+       that form the Kindle header background band.
+    3. Return the first row where text content begins (std rises above a
+       threshold, indicating black text on the light background).
 
-    The divider is distinguished from text content by requiring that:
-    - The dark pixels extend to both the left and right edges (text content
-      is always indented with margins).
-    - The line is thin (at most ``_MAX_DIVIDER_THICKNESS`` consecutive rows).
+    Text lines are NOT mistaken for the UI boundary because text content is
+    always indented — it does not extend to the leftmost and rightmost 5% of
+    the image.
 
-    Returns 0 if no header is detected.
+    Returns 0 if no UI boundary is found in the search region.
     """
     h_img, w_img = bgr.shape[:2]
     search_h = max(1, int(h_img * search_fraction))
 
     gray = cv2.cvtColor(bgr[:search_h], cv2.COLOR_BGR2GRAY)
 
-    # Pixel-darkness threshold: anything below this is "dark"
-    dark_thresh = 100
-    # Edge-strip width: leftmost and rightmost portion of image
-    edge_w = max(1, w_img // 20)  # 5% of width
-    max_divider_thickness = 10
+    # --- Step 1: find full-width horizontal edges via Sobel Y ---
+    sobel = cv2.Sobel(gray.astype(np.float64), cv2.CV_64F, 0, 1, ksize=3)
+    abs_sobel = np.abs(sobel)
 
-    # For each row, check if it looks like a divider:
-    # (a) overall dark pixel density > 60%
-    # (b) left edge strip is mostly dark
-    # (c) right edge strip is mostly dark
-    dark_mask = gray < dark_thresh
-    row_dark_density = dark_mask.sum(axis=1) / w_img
-    left_dark = dark_mask[:, :edge_w].sum(axis=1) / edge_w
-    right_dark = dark_mask[:, w_img - edge_w :].sum(axis=1) / edge_w
+    edge_thresh = 20.0
+    edge_w = max(1, w_img // 20)  # leftmost / rightmost 5%
 
-    divider_rows = (row_dark_density > 0.60) & (left_dark > 0.80) & (right_dark > 0.80)
+    edge_mask = abs_sobel > edge_thresh
+    row_density = edge_mask.sum(axis=1) / w_img
+    left_density = edge_mask[:, :edge_w].sum(axis=1) / edge_w
+    right_density = edge_mask[:, w_img - edge_w :].sum(axis=1) / edge_w
 
-    # Group consecutive qualifying rows and filter to thin bands
-    indices = np.where(divider_rows)[0]
+    # A row qualifies as a UI boundary edge if its horizontal-edge response
+    # spans at least 50% of the image width AND reaches both edge strips.
+    # Text content is always indented so edge strips have low Sobel response.
+    min_span = 0.50
+    min_edge_span = 0.50  # higher threshold to exclude text lines near page edges
+    boundary_rows = (
+        (row_density >= min_span)
+        & (left_density >= min_edge_span)
+        & (right_density >= min_edge_span)
+    )
+
+    indices = np.where(boundary_rows)[0]
     if len(indices) == 0:
-        return 0
+        return 0  # no UI boundary found
 
-    groups: list[tuple[int, int]] = []  # (start_row, end_row) inclusive
-    g_start = int(indices[0])
-    g_end = g_start
-    for idx in indices[1:]:
-        if idx == g_end + 1:
-            g_end = int(idx)
-        else:
-            groups.append((g_start, g_end))
-            g_start = int(idx)
-            g_end = g_start
-    groups.append((g_start, g_end))
+    # Take the lowest qualifying row as the end of the boundary edge band
+    last_boundary_row = int(indices[-1])
 
-    # Keep only thin bands (divider lines, not title bars or text blocks)
-    thin = [(s, e) for s, e in groups if (e - s + 1) <= max_divider_thickness]
-    if not thin:
-        return 0
-
-    # Take the lowest thin band (divider is below title bar and header text)
-    _, last_row = thin[-1]
-    content_start = last_row + 1
+    content_start = last_boundary_row + 1
 
     logger.debug(
-        "Header divider detected at rows %d-%d; content starts at %d",
-        thin[-1][0],
-        last_row,
+        "Header boundary edge at row %d; content starts at %d",
+        last_boundary_row,
         content_start,
     )
     return content_start
@@ -162,13 +156,16 @@ def _best_contour_region(
     return best
 
 
-def _has_dark_border(gray: np.ndarray, *, border_width: int = 20, threshold: int = 15) -> bool:
+def _has_dark_border(gray: np.ndarray, *, border_width: int = 20, threshold: int = 20) -> bool:
     """Return True when the image has a dark frame on at least two opposite sides.
 
     Kindle wraps the page in a near-black background.  Checking that two
     opposing edge strips (left+right or top+bottom) are predominantly dark
     distinguishes a Kindle chrome border from a thin UI bar that only appears
     at the top of the image.
+
+    The threshold is set to 20 to capture Kindle chrome (typical value ~16-17)
+    while remaining below standard dark cover-page content (value ~40+).
     """
     h, w = gray.shape
     bw = min(border_width, w // 4, h // 4)
@@ -209,9 +206,9 @@ def _detect_by_brightness(
     if not _has_dark_border(gray):
         return None
 
-    # Use a low threshold so even dark cover pages (value ~40) are captured.
-    # The Kindle background is pure black (0); anything above 15 is page.
-    _, mask = cv2.threshold(gray, 15, 255, cv2.THRESH_BINARY)
+    # Use a threshold that captures dark cover pages (value ~40+) while
+    # excluding Kindle chrome (value ~16-17).  Threshold 20 sits between them.
+    _, mask = cv2.threshold(gray, 20, 255, cv2.THRESH_BINARY)
 
     # Close gaps so the page appears as one solid blob
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (20, 20))
@@ -242,6 +239,10 @@ def _detect_by_edges(
     Used as a fallback when the brightness pass fails (e.g. a uniformly
     bright image with no dark border).
 
+    For bright reading-mode pages, text lines produce many small, scattered
+    edge contours.  A large dilation kernel merges them into one coherent blob
+    before bounding-box extraction.
+
     Returns None when no qualifying region is found.
     """
     h_img, w_img = bgr.shape[:2]
@@ -257,8 +258,10 @@ def _detect_by_edges(
         low, high = 30.0, 100.0
     edges = cv2.Canny(blurred, low, high)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 8))
-    dilated = cv2.dilate(edges, kernel, iterations=2)
+    # Use a wide kernel to bridge gaps between scattered text-line edges so
+    # that all text content merges into a single contour blob.
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 20))
+    dilated = cv2.dilate(edges, kernel, iterations=3)
 
     contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
@@ -342,6 +345,14 @@ def detect_content_region(
             region.h,
         )
         return region
+
+    # Last resort: if a header was detected, return the entire area below it.
+    # This preserves the header-stripping benefit even when content detection
+    # cannot isolate a precise bounding box.
+    if header_y > 0:
+        h_img, w_img = bgr.shape[:2]
+        logger.debug("Both passes failed; returning full area below header (y=%d).", header_y)
+        return ContentRegion(x=0, y=header_y, w=w_img, h=h_img - header_y)
 
     raise CropError("Could not detect a content region via brightness or edge detection.")
 
