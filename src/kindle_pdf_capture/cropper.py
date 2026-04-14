@@ -335,7 +335,7 @@ def detect_content_region(
     *,
     margin: int = 15,
     min_area_ratio: float = 0.20,
-    top_padding: int = 40,
+    top_padding: int = 0,
 ) -> ContentRegion:
     """Detect the main text-body region in a Kindle screenshot.
 
@@ -414,15 +414,16 @@ def detect_content_region(
         body = bgr
 
     if header_y > 0:
-        # Pad upward from header_y, but never above the macOS title bar bottom.
-        safe_padding = min(top_padding, header_y - titlebar_y, header_y // 2)
-        content_y = max(titlebar_y, header_y - safe_padding)
+        # Crop from header_y (the row immediately after the book-title text).
+        # top_padding allows adding a small upward margin if desired, but must
+        # never move content_y above titlebar_y (into the macOS title bar area).
+        content_y = max(titlebar_y, header_y - top_padding)
         logger.debug(
             "Reading-mode page: returning full-width rect at y=%d (header_y=%d, titlebar_y=%d, padding=%d).",
             content_y,
             header_y,
             titlebar_y,
-            safe_padding,
+            top_padding,
         )
         return ContentRegion(x=0, y=content_y, w=w_img, h=h_img - content_y)
 
@@ -456,13 +457,12 @@ def detect_content_region(
     # This preserves the header-stripping benefit even when content detection
     # cannot isolate a precise bounding box.
     if header_y > 0:
-        safe_padding = min(top_padding, header_y - titlebar_y, header_y // 2)
-        content_y = max(titlebar_y, header_y - safe_padding)
+        content_y = max(titlebar_y, header_y - top_padding)
         logger.debug(
             "Both passes failed; returning full area below header (y=%d, titlebar_y=%d, padding=%d).",
             header_y,
             titlebar_y,
-            safe_padding,
+            top_padding,
         )
         return ContentRegion(x=0, y=content_y, w=w_img, h=h_img - content_y)
 
