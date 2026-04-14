@@ -51,13 +51,71 @@ class CropError(RuntimeError):
 def _find_header_bottom(bgr: np.ndarray, *, search_fraction: float = 0.25) -> int:
     """Return the y-coordinate just below the Kindle header divider line.
 
-    Scans the top *search_fraction* of the image for a prominent horizontal
-    line (the divider between Kindle chrome and book content).
+    Scans the top *search_fraction* of the image for a thin, full-width
+    horizontal dark line (the divider between Kindle chrome and book content).
+
+    The divider is distinguished from text content by requiring that:
+    - The dark pixels extend to both the left and right edges (text content
+      is always indented with margins).
+    - The line is thin (at most ``_MAX_DIVIDER_THICKNESS`` consecutive rows).
 
     Returns 0 if no header is detected.
     """
-    # TODO: implement header detection
-    return 0
+    h_img, w_img = bgr.shape[:2]
+    search_h = max(1, int(h_img * search_fraction))
+
+    gray = cv2.cvtColor(bgr[:search_h], cv2.COLOR_BGR2GRAY)
+
+    # Pixel-darkness threshold: anything below this is "dark"
+    dark_thresh = 100
+    # Edge-strip width: leftmost and rightmost portion of image
+    edge_w = max(1, w_img // 20)  # 5% of width
+    max_divider_thickness = 10
+
+    # For each row, check if it looks like a divider:
+    # (a) overall dark pixel density > 60%
+    # (b) left edge strip is mostly dark
+    # (c) right edge strip is mostly dark
+    dark_mask = gray < dark_thresh
+    row_dark_density = dark_mask.sum(axis=1) / w_img
+    left_dark = dark_mask[:, :edge_w].sum(axis=1) / edge_w
+    right_dark = dark_mask[:, w_img - edge_w :].sum(axis=1) / edge_w
+
+    divider_rows = (row_dark_density > 0.60) & (left_dark > 0.80) & (right_dark > 0.80)
+
+    # Group consecutive qualifying rows and filter to thin bands
+    indices = np.where(divider_rows)[0]
+    if len(indices) == 0:
+        return 0
+
+    groups: list[tuple[int, int]] = []  # (start_row, end_row) inclusive
+    g_start = int(indices[0])
+    g_end = g_start
+    for idx in indices[1:]:
+        if idx == g_end + 1:
+            g_end = int(idx)
+        else:
+            groups.append((g_start, g_end))
+            g_start = int(idx)
+            g_end = g_start
+    groups.append((g_start, g_end))
+
+    # Keep only thin bands (divider lines, not title bars or text blocks)
+    thin = [(s, e) for s, e in groups if (e - s + 1) <= max_divider_thickness]
+    if not thin:
+        return 0
+
+    # Take the lowest thin band (divider is below title bar and header text)
+    _, last_row = thin[-1]
+    content_start = last_row + 1
+
+    logger.debug(
+        "Header divider detected at rows %d-%d; content starts at %d",
+        thin[-1][0],
+        last_row,
+        content_start,
+    )
+    return content_start
 
 
 def _clamp_region(
@@ -251,8 +309,18 @@ def detect_content_region(
     Raises:
         CropError: If neither pass finds a suitable region.
     """
-    region = _detect_by_brightness(bgr, margin=margin, min_area_ratio=min_area_ratio)
+    # Strip macOS title bar and Kindle header before content detection
+    header_y = _find_header_bottom(bgr)
+    if header_y > 0:
+        body = bgr[header_y:]
+        logger.debug("Stripped header: %d rows removed from top.", header_y)
+    else:
+        body = bgr
+
+    region = _detect_by_brightness(body, margin=margin, min_area_ratio=min_area_ratio)
     if region is not None:
+        # Shift y back to original image coordinates
+        region = ContentRegion(x=region.x, y=region.y + header_y, w=region.w, h=region.h)
         logger.debug(
             "Content region (brightness): x=%d y=%d w=%d h=%d",
             region.x,
@@ -263,8 +331,9 @@ def detect_content_region(
         return region
 
     logger.debug("Brightness pass found nothing; trying edge detection.")
-    region = _detect_by_edges(bgr, margin=margin, min_area_ratio=min_area_ratio)
+    region = _detect_by_edges(body, margin=margin, min_area_ratio=min_area_ratio)
     if region is not None:
+        region = ContentRegion(x=region.x, y=region.y + header_y, w=region.w, h=region.h)
         logger.debug(
             "Content region (edges): x=%d y=%d w=%d h=%d",
             region.x,
