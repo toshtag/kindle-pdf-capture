@@ -87,6 +87,24 @@ def _run_capture(
 
         cover_frame = capture_window(window)
         cover_gray = _cv2.cvtColor(cover_frame, _cv2.COLOR_BGR2GRAY)
+        h_cf, w_cf = cover_gray.shape
+        bw = min(20, w_cf // 4, h_cf // 4)
+        edge_means = {
+            "left": float(cover_gray[:, :bw].mean()),
+            "right": float(cover_gray[:, w_cf - bw :].mean()),
+            "top": float(cover_gray[:bw, :].mean()),
+            "bottom": float(cover_gray[h_cf - bw :, :].mean()),
+        }
+        log.info(
+            "Cover frame %dx%d. Edge mean luminance — L:%.1f R:%.1f T:%.1f B:%.1f",
+            w_cf,
+            h_cf,
+            edge_means["left"],
+            edge_means["right"],
+            edge_means["top"],
+            edge_means["bottom"],
+        )
+
         if _has_dark_border(cover_gray):
             from kindle_pdf_capture.cropper import _detect_by_brightness
 
@@ -109,9 +127,11 @@ def _run_capture(
                 # Wait for Kindle to reflow at the new window size
                 time.sleep(1.5)
             else:
-                log.debug("Cover brightness detection returned nothing; skipping resize.")
+                log.info("Cover brightness detection returned nothing; skipping resize.")
         else:
-            log.debug("First frame has no dark chrome border; skipping cover-based resize.")
+            log.info(
+                "Cover frame has no dark chrome border (threshold=20, ratio>0.80); skipping resize."
+            )
     except Exception as exc:
         log.warning("Cover-based window resize failed: %s — continuing at current size.", exc)
 
