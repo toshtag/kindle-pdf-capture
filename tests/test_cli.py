@@ -889,7 +889,7 @@ class TestApplyCropLock:
         # Partial-width region (e.g. a centred cover illustration)
         region = self._make_region(x=100, y=130, w=1000, h=770)  # w=1000 < frame w=1200
 
-        new_region, new_lock = _apply_crop_lock(region, frame, titlebar_y, None)
+        _, new_lock = _apply_crop_lock(region, frame, titlebar_y, None)
 
         assert new_lock is None, "Partial-width region must not set locked_crop_y"
 
