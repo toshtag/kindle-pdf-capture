@@ -343,7 +343,7 @@ def detect_content_region(
     *,
     margin: int = 15,
     min_area_ratio: float = 0.20,
-    top_padding: int = 20,
+    top_padding: int = 40,
 ) -> ContentRegion:
     """Detect the main text-body region in a Kindle screenshot.
 
@@ -394,12 +394,15 @@ def detect_content_region(
     # guarantees a consistent full-frame width for every reading-mode page.
     gray_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     if header_y > 0 and not _has_dark_border(gray_full):
-        content_y = max(0, header_y - top_padding)
+        # Do not scroll back past the macOS title bar: cap padding at header_y // 2
+        # so we never include the decorative UI area above the Kindle header.
+        safe_padding = min(top_padding, header_y // 2)
+        content_y = header_y - safe_padding
         logger.debug(
             "Reading-mode page: returning full-width rect at y=%d (header_y=%d, padding=%d).",
             content_y,
             header_y,
-            top_padding,
+            safe_padding,
         )
         return ContentRegion(x=0, y=content_y, w=w_img, h=h_img - content_y)
 
@@ -433,11 +436,12 @@ def detect_content_region(
     # This preserves the header-stripping benefit even when content detection
     # cannot isolate a precise bounding box.
     if header_y > 0:
-        content_y = max(0, header_y - top_padding)
+        safe_padding = min(top_padding, header_y // 2)
+        content_y = header_y - safe_padding
         logger.debug(
             "Both passes failed; returning full area below header (y=%d, padding=%d).",
             header_y,
-            top_padding,
+            safe_padding,
         )
         return ContentRegion(x=0, y=content_y, w=w_img, h=h_img - content_y)
 

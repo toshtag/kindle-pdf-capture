@@ -579,7 +579,7 @@ class TestDetectContentRegionWithHeader:
         region = _dcr(img)
 
         # Allow up to top_padding (default 20) rows above content_start as margin
-        assert region.y >= content_start - 25, (
+        assert region.y >= content_start - 45, (
             f"Region starts too high: y={region.y}, content_start={content_start}"
         )
 
@@ -606,7 +606,7 @@ class TestDetectContentRegionWithHeader:
         img, content_start = _make_reading_mode_page()
         region = detect_content_region(img)
         # Allow up to top_padding (default 20) rows above content_start
-        assert region.y >= content_start - 25, (
+        assert region.y >= content_start - 45, (
             f"Header not stripped: region.y={region.y}, content_start={content_start}"
         )
 
@@ -632,7 +632,7 @@ class TestDetectContentRegionWithHeader:
         region = detect_content_region(img)
         assert isinstance(region, ContentRegion)
         # Content region must be below or at chrome boundary
-        assert region.y >= content_start - 20, (
+        assert region.y >= content_start - 45, (
             f"Chrome included: region.y={region.y}, content_start={content_start}"
         )
 
@@ -659,4 +659,4 @@ class TestDetectContentRegionWithHeader:
             f"got region.w={region.w} (image width={w_img})"
         )
         # Must still start within top_padding rows of the header bottom
-        assert region.y >= content_start - 25
+        assert region.y >= content_start - 45
