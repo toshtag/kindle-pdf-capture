@@ -17,7 +17,7 @@ import click
 from rich.console import Console
 from rich.logging import RichHandler
 
-from kindle_pdf_capture.cropper import CropError, detect_content_region
+from kindle_pdf_capture.cropper import CropError, _find_titlebar_bottom, detect_content_region
 from kindle_pdf_capture.normalize import normalize_image, save_jpeg
 from kindle_pdf_capture.ocr import run_ocr
 from kindle_pdf_capture.orchestrator import (
@@ -83,7 +83,7 @@ def _run_capture(
     # Requires the cover page (dark-chrome bordered) to be visible in Kindle.
     orig_window_size: tuple[int, int] | None = None
     try:
-        from kindle_pdf_capture.cropper import _detect_by_brightness, _find_titlebar_bottom
+        from kindle_pdf_capture.cropper import _detect_by_brightness
 
         cover_frame = capture_window(window)
 
@@ -165,13 +165,13 @@ def _run_capture(
                 # For reading-mode pages (full-width rect with Kindle header
                 # stripped), lock the crop y on the first occurrence so all
                 # subsequent pages share the same height.
-                # A cover/image page has region.y == titlebar_y (only the macOS
-                # title bar removed); reading-mode pages have a larger y because
-                # the Kindle header band is also stripped.  Only lock when y
-                # exceeds the title-bar-only threshold (80px in logical pixels
-                # at 2x Retina = 40 logical px covers any title bar we've seen).
-                _TITLEBAR_ONLY_THRESHOLD = 80
-                if region.w == frame.shape[1] and region.y >= _TITLEBAR_ONLY_THRESHOLD:
+                # Cover/image pages have region.y == _find_titlebar_bottom(frame)
+                # (only the macOS title bar removed); reading-mode pages have a
+                # larger y because the Kindle header band is also stripped.
+                # Distinguish dynamically: only lock when region.y exceeds the
+                # title-bar-only boundary measured from this frame.
+                titlebar_y = _find_titlebar_bottom(frame)
+                if region.w == frame.shape[1] and region.y > titlebar_y:
                     if locked_crop_y is None:
                         locked_crop_y = region.y
                         log.debug("Locked crop y=%d from page %d.", locked_crop_y, page_num)
