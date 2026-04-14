@@ -493,6 +493,73 @@ class TestFindHeaderBottom:
         result = _find_header_bottom(img)
         assert result == 0, f"Text incorrectly detected as divider; got {result}"
 
+    def test_skips_kindle_header_band_with_title_text(self) -> None:
+        """_find_header_bottom must skip the full Kindle header band.
+
+        Real-world reading pages have:
+          1. macOS title bar (white, rows 0-55)
+          2. Full-width Sobel Y edge at title-bar/header boundary (rows 55-56)
+          3. Kindle header background (uniform gray, rows 57-107)
+          4. Book title text in center (rows 108-128, non-uniform)
+          5. Kindle header background again (uniform gray, rows 129-183)
+          6. Book content starts (rows 184+, non-uniform)
+
+        The function must return the start of book content (~184), not just
+        row 57 (the first row after the Sobel boundary). The header band
+        (rows 57-183), which includes "ロードマップ (JAPANESE EDITION)", must
+        be fully stripped.
+
+        The key constraint: rows 183-184 do NOT produce a full-width Sobel
+        edge (the transition from uniform gray to book text is gradual and the
+        text is indented), so the boundary-detection Sobel Y step alone
+        returns row 57 as content_start for this layout.  The implementation
+        must use a secondary strategy (e.g. skipping uniform header-background
+        rows) to advance past the header band.
+        """
+        # Build the real-world layout synthetically.
+        # IMPORTANT: rows 183→184 must NOT create a full-width Sobel Y edge.
+        # In the real Kindle, the header-band-to-content transition is gradual:
+        # the gray background simply continues and sparse indented text starts
+        # appearing — no abrupt full-width step-change at rows 183-184.
+        # We achieve this by keeping the same gray (222) value throughout rows
+        # 57-194 and placing text on top of it starting at row 195.
+        width, height = 2240, 2358
+
+        # Start with uniform light gray so rows 57-194 have no color step
+        img = np.full((height, width, 3), 222, dtype=np.uint8)
+
+        # macOS title bar: white (rows 0-55)
+        img[:55, :] = 255
+
+        # Full-width boundary band at rows 55-56 (Sobel Y detects this)
+        img[55:57, :] = 180  # abrupt brightness step across full width
+
+        # Kindle header band 1 (57-107) and band 2 (128-183): already gray(222)
+
+        # Book title text (centered only, does NOT reach left/right edges)
+        title_x = width // 4
+        title_w = width // 2
+        img[108:128, title_x : title_x + title_w] = 40  # dark text (centered only)
+
+        # Book content: rows 184+ with indented text on gray background.
+        # Rows 183→184 stay at gray(222) — no full-width Sobel Y edge here.
+        text_x = int(width * 0.15)  # 15% indent
+        text_w_val = int(width * 0.70)  # 70% of width (never reaching edge strips)
+        img = _draw_text_block(img, x=text_x, y=195, w=text_w_val, h=height - 300)
+
+        result = _find_header_bottom(img)
+
+        # Must return the start of book content (184+), NOT row 57 (which is
+        # the first row after the detected Sobel boundary).
+        assert result >= 180, (
+            f"Expected content start >= 180 (full header band stripped), got {result}. "
+            "The implementation must skip the uniform header-background rows "
+            "after the Sobel boundary edge."
+        )
+        assert result <= 220, (
+            f"Expected content start <= 220, got {result} (overshot into book content)"
+        )
+
 
 # ---------------------------------------------------------------------------
 # detect_content_region: header stripping integration
