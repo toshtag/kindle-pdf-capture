@@ -17,7 +17,6 @@ from kindle_pdf_capture.cropper import (
     CropError,
     _find_header_bottom,
     detect_content_region,
-    fallback_crop,
 )
 
 # ---------------------------------------------------------------------------
@@ -227,44 +226,6 @@ class TestDetectContentRegionKindleLayout:
         # Full frame returned — chrome is kept, not trimmed
         assert region.x == 0
         assert region.w == 1200
-
-
-# ---------------------------------------------------------------------------
-# fallback_crop
-# ---------------------------------------------------------------------------
-
-
-class TestFallbackCrop:
-    def test_trims_fixed_fraction(self) -> None:
-        """fallback_crop removes a fraction from each edge."""
-        img = _make_white_canvas(1200, 900)
-        region = fallback_crop(img, fraction=0.05)
-
-        # 5% of 1200 = 60px from left/right → x=60, w=1080
-        assert region.x == pytest.approx(60, abs=2)
-        assert region.y == pytest.approx(45, abs=2)  # 5% of 900
-        assert region.w == pytest.approx(1080, abs=2)
-        assert region.h == pytest.approx(810, abs=2)
-
-    def test_returns_content_region(self) -> None:
-        img = _make_white_canvas()
-        result = fallback_crop(img)
-        assert isinstance(result, ContentRegion)
-
-    def test_default_fraction_is_sensible(self) -> None:
-        """Default fraction should crop at least 2% per side."""
-        img = _make_white_canvas(1200, 900)
-        region = fallback_crop(img)
-        assert region.x >= 24  # ≥ 2% of 1200
-        assert region.y >= 18  # ≥ 2% of 900
-
-    def test_zero_fraction_returns_full_image(self) -> None:
-        img = _make_white_canvas(1200, 900)
-        region = fallback_crop(img, fraction=0.0)
-        assert region.x == 0
-        assert region.y == 0
-        assert region.w == 1200
-        assert region.h == 900
 
 
 # ---------------------------------------------------------------------------
