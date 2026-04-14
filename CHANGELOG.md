@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-04-15
+
+### Fixed
+
+- `_find_header_bottom` now detects the book-title text block boundary
+  instead of using a fraction-based search window, eliminating the
+  168/308-page misdetection where the title text was included in the
+  title-bar search region and returned a wrong `titlebar_y=139`.
+- Cover/image pages (bright but no title text) no longer fall through to
+  the brightness/edge-detection passes. `detect_content_region` now
+  returns the full frame from `titlebar_y` directly when `header_y == 0`,
+  preventing a regression where the cover page was cropped to a small
+  interior rect instead of the full page.
+- `_find_titlebar_bottom` gains a `search_h` parameter (fixed 60-row
+  window) so Kindle chrome elements below y=60 are never mistaken for
+  the macOS title bar boundary.
+- `detect_content_region` simplified to two passes only (title-bar strip
+  + header strip); brightness/edge-detection passes removed as they were
+  unreachable after the header-detection logic was corrected.
+
 ## [1.0.1] - 2026-04-14
 
 ### Fixed
@@ -162,7 +182,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bilingual documentation (English and Japanese)
 - GitHub PR/issue templates, Dependabot, and security policy
 
-[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.2.0...v1.0.0
 [0.2.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.3...v0.2.0
