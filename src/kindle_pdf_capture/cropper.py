@@ -48,6 +48,46 @@ class CropError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
+def _find_titlebar_bottom(bgr: np.ndarray, *, search_fraction: float = 0.25) -> int:
+    """Return the y-coordinate of the macOS title bar bottom edge only.
+
+    Uses Sobel Y to find the last full-width horizontal edge in the top
+    *search_fraction* of the image.  This is the boundary between the macOS
+    title bar and whatever is below (Kindle chrome, header band, or content).
+
+    Returns 0 if no such edge is found.
+    """
+    h_img, w_img = bgr.shape[:2]
+    search_h = max(1, int(h_img * search_fraction))
+
+    gray = cv2.cvtColor(bgr[:search_h], cv2.COLOR_BGR2GRAY)
+
+    sobel = cv2.Sobel(gray.astype(np.float64), cv2.CV_64F, 0, 1, ksize=3)
+    abs_sobel = np.abs(sobel)
+
+    edge_thresh = 20.0
+    edge_w = max(1, w_img // 20)  # leftmost / rightmost 5%
+
+    edge_mask = abs_sobel > edge_thresh
+    row_density = edge_mask.sum(axis=1) / w_img
+    left_density = edge_mask[:, :edge_w].sum(axis=1) / edge_w
+    right_density = edge_mask[:, w_img - edge_w :].sum(axis=1) / edge_w
+
+    min_span = 0.50
+    min_edge_span = 0.50
+    boundary_rows = (
+        (row_density >= min_span)
+        & (left_density >= min_edge_span)
+        & (right_density >= min_edge_span)
+    )
+
+    indices = np.where(boundary_rows)[0]
+    if len(indices) == 0:
+        return 0
+
+    return int(indices[-1]) + 1
+
+
 def _find_header_bottom(bgr: np.ndarray, *, search_fraction: float = 0.25) -> int:
     """Return the y-coordinate where book content starts, below the Kindle header.
 
@@ -343,38 +383,92 @@ def detect_content_region(
     *,
     margin: int = 15,
     min_area_ratio: float = 0.20,
+    top_padding: int = 40,
 ) -> ContentRegion:
     """Detect the main text-body region in a Kindle screenshot.
 
-    Two-pass strategy:
+    Three-pass strategy:
 
-    1. **Brightness pass**: threshold pixels above the near-black Kindle
-       background to isolate the page blob.  Works for both white-background
-       text pages and dark cover pages, as long as the page is brighter than
-       the surrounding chrome.
+    1. **Full-width page rect** (reading mode): when a Kindle header is
+       detected but no dark chrome border surrounds the image, the entire
+       area below the header is the page.  Returning the full frame width
+       ensures all reading-mode pages produce the same output size regardless
+       of how much text is on the page or where the text margins sit.
 
-    2. **Edge-detection fallback**: used when the brightness pass yields no
-       qualifying region (e.g. the entire image is bright with no dark border).
+    2. **Brightness pass**: threshold pixels above the near-black Kindle
+       background to isolate the page blob.  Works for cover pages and
+       embedded-chrome layouts where the page is brighter than the surrounding
+       chrome frame.
+
+    3. **Edge-detection fallback**: used when the brightness pass yields no
+       qualifying region (e.g. the entire image is bright with no dark border
+       and no header was detected).
 
     Args:
         bgr: uint8 BGR ndarray (OpenCV format).
         margin: Pixels to expand the detected bounding box on each side.
         min_area_ratio: Minimum fraction of total image area a candidate
             must cover to be considered valid.
+        top_padding: Extra rows to keep above the content start when
+            returning a full-width reading-mode rect.  Provides a small
+            visual margin at the top of each cropped page.
 
     Returns:
         ContentRegion describing the detected body area.
 
     Raises:
-        CropError: If neither pass finds a suitable region.
+        CropError: If no suitable region is found.
     """
-    # Strip macOS title bar and Kindle header before content detection
+    h_img, w_img = bgr.shape[:2]
+
+    gray_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+
+    # Guard: all-black frame (screen recording blocked) — raise CropError below.
+    if float(gray_full.max()) <= 20:
+        logger.debug("All-black frame; skipping all passes.")
+        raise CropError("Frame is all-black — screen recording may be blocked.")
+
+    # Step 1: locate the macOS title bar bottom edge (Sobel only, no header scan).
+    # This is the only UI element we always strip regardless of page type.
+    titlebar_y = _find_titlebar_bottom(bgr)
+
+    # Step 2: decide whether to also strip the Kindle reading-mode header band.
+    # If the row immediately below the title bar is bright (mean ≥ 200), this is
+    # a reading-mode page with a light-gray Kindle header that must be stripped.
+    # If it is dark (cover chrome, image page), return the full frame from
+    # titlebar_y — the dark area is content and must not be trimmed further.
+    below_titlebar_mean = (
+        float(gray_full[titlebar_y : titlebar_y + 10].mean()) if titlebar_y < h_img else 255.0
+    )
+    is_reading_mode = below_titlebar_mean >= 200
+
+    if not is_reading_mode:
+        # Cover / image page: return everything below the title bar.
+        logger.debug(
+            "Cover/image page (below-titlebar mean=%.1f): returning full frame from y=%d.",
+            below_titlebar_mean,
+            titlebar_y,
+        )
+        return ContentRegion(x=0, y=titlebar_y, w=w_img, h=h_img - titlebar_y)
+
+    # Reading-mode page: also strip the Kindle header band (title text + divider).
     header_y = _find_header_bottom(bgr)
     if header_y > 0:
         body = bgr[header_y:]
         logger.debug("Stripped header: %d rows removed from top.", header_y)
     else:
         body = bgr
+
+    if header_y > 0:
+        safe_padding = min(top_padding, header_y // 2)
+        content_y = header_y - safe_padding
+        logger.debug(
+            "Reading-mode page: returning full-width rect at y=%d (header_y=%d, padding=%d).",
+            content_y,
+            header_y,
+            safe_padding,
+        )
+        return ContentRegion(x=0, y=content_y, w=w_img, h=h_img - content_y)
 
     region = _detect_by_brightness(body, margin=margin, min_area_ratio=min_area_ratio)
     if region is not None:
@@ -406,9 +500,14 @@ def detect_content_region(
     # This preserves the header-stripping benefit even when content detection
     # cannot isolate a precise bounding box.
     if header_y > 0:
-        h_img, w_img = bgr.shape[:2]
-        logger.debug("Both passes failed; returning full area below header (y=%d).", header_y)
-        return ContentRegion(x=0, y=header_y, w=w_img, h=h_img - header_y)
+        safe_padding = min(top_padding, header_y // 2)
+        content_y = header_y - safe_padding
+        logger.debug(
+            "Both passes failed; returning full area below header (y=%d, padding=%d).",
+            header_y,
+            safe_padding,
+        )
+        return ContentRegion(x=0, y=content_y, w=w_img, h=h_img - content_y)
 
     raise CropError("Could not detect a content region via brightness or edge detection.")
 

@@ -268,3 +268,46 @@ class TestFindKindleWindow:
             capture_fn=self._make_capture_fn(cover),
         )
         assert isinstance(result, KindleWindow)
+
+
+# ---------------------------------------------------------------------------
+# resize_kindle_window
+# ---------------------------------------------------------------------------
+
+
+class TestResizeKindleWindow:
+    def test_calls_resize_fn_with_correct_size(self) -> None:
+        """resize_kindle_window must invoke the resize callable with pid and dimensions."""
+        from kindle_pdf_capture.window_capture import resize_kindle_window
+
+        calls: list[tuple[int, int, int]] = []
+
+        def _fake_resize(pid: int, width: int, height: int) -> None:
+            calls.append((pid, width, height))
+
+        window = KindleWindow(pid=42, window_id=1, x=0, y=0, width=1200, height=900)
+        resize_kindle_window(window, target_width=800, target_height=700, resize_fn=_fake_resize)
+
+        assert calls == [(42, 800, 700)]
+
+    def test_returns_original_size(self) -> None:
+        """resize_kindle_window must return (original_width, original_height)."""
+        from kindle_pdf_capture.window_capture import resize_kindle_window
+
+        window = KindleWindow(pid=1, window_id=1, x=0, y=0, width=1200, height=900)
+        orig_w, orig_h = resize_kindle_window(
+            window, target_width=800, target_height=700, resize_fn=lambda *_: None
+        )
+        assert orig_w == 1200
+        assert orig_h == 900
+
+    def test_noop_when_already_target_size(self) -> None:
+        """If the window is already the target size, resize_fn must not be called."""
+        from kindle_pdf_capture.window_capture import resize_kindle_window
+
+        calls: list = []
+        window = KindleWindow(pid=1, window_id=1, x=0, y=0, width=800, height=700)
+        resize_kindle_window(
+            window, target_width=800, target_height=700, resize_fn=lambda *a: calls.append(a)
+        )
+        assert calls == []

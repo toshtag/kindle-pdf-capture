@@ -146,6 +146,67 @@ def _is_content_page(bgr: np.ndarray) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Window resize (AppleScript via osascript)
+# ---------------------------------------------------------------------------
+
+
+def _default_ax_resize(pid: int, width: int, height: int) -> None:
+    """Resize the frontmost Kindle window via AppleScript (osascript).
+
+    Uses ``System Events`` to set the window size by process name.
+    Requires Accessibility permission for the calling process.
+    """
+    import subprocess
+
+    script = (
+        f'tell application "System Events" to tell process "Kindle" '
+        f"to set size of window 1 to {{{width}, {height}}}"
+    )
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        logger.warning("osascript resize failed: %s", result.stderr.strip())
+
+
+def resize_kindle_window(
+    window: KindleWindow,
+    *,
+    target_width: int,
+    target_height: int,
+    force: bool = False,
+    resize_fn: Callable[[int, int, int], None] = _default_ax_resize,
+) -> tuple[int, int]:
+    """Resize the Kindle window to *target_width* x *target_height*.
+
+    Returns the original (width, height) so the caller can restore it later.
+    If the window is already the target size, *resize_fn* is not called unless
+    *force* is True.
+
+    Args:
+        window: The KindleWindow to resize.
+        target_width: Desired window width in logical pixels.
+        target_height: Desired window height in logical pixels.
+        force: Always call *resize_fn* even if the size appears unchanged.
+            Use this when restoring to the original size after a resize, since
+            the KindleWindow snapshot does not update to reflect intermediate
+            resizes.
+        resize_fn: Injectable callable ``(pid, width, height) → None``
+            (default: Accessibility API).
+
+    Returns:
+        ``(original_width, original_height)`` tuple.
+    """
+    orig_w, orig_h = window.width, window.height
+    if force or orig_w != target_width or orig_h != target_height:
+        resize_fn(window.pid, target_width, target_height)
+        logger.debug("Window resized: %dx%d → %dx%d", orig_w, orig_h, target_width, target_height)
+    return orig_w, orig_h
+
+
+# ---------------------------------------------------------------------------
 # Default Quartz implementations (macOS only)
 # ---------------------------------------------------------------------------
 
@@ -203,13 +264,18 @@ def _default_capture(window: KindleWindow) -> np.ndarray:
         height = Quartz.CGImageGetHeight(cg_image)
         bpc = Quartz.CGImageGetBitsPerComponent(cg_image)
         bpp = Quartz.CGImageGetBitsPerPixel(cg_image)
+        bytes_per_row = Quartz.CGImageGetBytesPerRow(cg_image)
 
         from Quartz.CoreGraphics import CGDataProviderCopyData
 
         raw = CGDataProviderCopyData(Quartz.CGImageGetDataProvider(cg_image))
-        arr = np.frombuffer(raw, dtype=np.uint8).reshape((height, width, bpp // bpc))
-        # CG returns BGRA; drop alpha and keep BGR
-        bgr = arr[:, :, :3].copy()
+        # CGImage row data may include padding bytes for memory alignment.
+        # Reshape using the actual bytes_per_row stride, then slice to true width.
+        channels = bpp // bpc
+        stride_pixels = bytes_per_row // channels
+        arr = np.frombuffer(raw, dtype=np.uint8).reshape((height, stride_pixels, channels))
+        # Slice to true pixel width and drop alpha (CG returns BGRA → BGR)
+        bgr = arr[:, :width, :3].copy()
         return bgr
     except WindowCaptureError:
         raise
