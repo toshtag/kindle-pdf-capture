@@ -593,9 +593,13 @@ class TestConsistentScale:
         from kindle_pdf_capture.cropper import ContentRegion
         from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
 
+        detect_count = 0
+
         def _detect_region(*_a, **_kw):
-            rw = region_widths[min(call_count, len(region_widths) - 1)]
-            return ContentRegion(x=50, y=50, w=rw, h=700)
+            nonlocal detect_count
+            idx = min(detect_count, len(region_widths) - 1)
+            detect_count += 1
+            return ContentRegion(x=50, y=50, w=region_widths[idx], h=700)
 
         def _capture_normalize(img, *, resize_width):
             normalize_calls.append(resize_width)
