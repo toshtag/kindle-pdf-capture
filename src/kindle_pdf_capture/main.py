@@ -112,12 +112,18 @@ def _run_capture(
         try:
             region = detect_content_region(frame)
             cropped = frame[region.slice()]
+            # Scale the cropped region proportionally to the raw frame width so
+            # that all pages share the same pixels-per-physical-unit ratio and
+            # text appears at a consistent size throughout the PDF.
+            scale = config.resize_width / frame.shape[1]
+            target_w = max(1, round(region.w * scale))
         except CropError as exc:
             log.warning("Page %d crop failed: %s — using full frame.", page_num, exc)
             cropped = frame
+            target_w = config.resize_width
 
         # Normalise and save
-        normalised = normalize_image(cropped, resize_width=config.resize_width)
+        normalised = normalize_image(cropped, resize_width=target_w)
         cropped_path = session.cropped_path(page_num)
         save_jpeg(normalised, cropped_path, quality=config.jpeg_quality)
 
