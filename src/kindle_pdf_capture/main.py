@@ -78,19 +78,9 @@ def _run_capture(
     window = find_kindle_window()
     focus_window(window)
 
-    session = CaptureSession(config)
-
-    if config.start_delay > 0:
-        log.info("Starting in %d s — switch to Kindle now.", config.start_delay)
-        time.sleep(config.start_delay)
-
     # --- Phase 0: detect cover page rect, resize window to match ---
-    # Capture the cover (dark-chrome bordered) page to measure the book page
-    # width, then resize the window so all body pages render at the same width.
-    # Only resize when the current frame actually shows a dark-chrome layout;
-    # if Kindle is already showing a body page (no chrome), skip the resize.
-    # This runs AFTER start_delay so the user has already switched to Kindle
-    # and the correct page (cover) is visible.
+    # Runs before the capture loop so the window width is fixed for all pages.
+    # Requires the cover page (dark-chrome bordered) to be visible in Kindle.
     orig_window_size: tuple[int, int] | None = None
     try:
         import cv2 as _cv2
@@ -124,6 +114,12 @@ def _run_capture(
             log.debug("First frame has no dark chrome border; skipping cover-based resize.")
     except Exception as exc:
         log.warning("Cover-based window resize failed: %s — continuing at current size.", exc)
+
+    session = CaptureSession(config)
+
+    if config.start_delay > 0:
+        log.info("Starting in %d s …", config.start_delay)
+        time.sleep(config.start_delay)
 
     page_num = 1
 
@@ -259,9 +255,9 @@ def _run_capture(
 )
 @click.option(
     "--start-delay",
-    default=3,
+    default=0,
     show_default=True,
-    help="Seconds to wait before capture begins (use to switch to Kindle).",
+    help="Additional seconds to wait after the ready prompt before capture begins.",
 )
 @click.option(
     "--direction",
@@ -351,6 +347,17 @@ def cli(
             log.info("Retrying %d failed page(s): %s", len(pages_to_retry), pages_to_retry)
         else:
             log.info("No failed pages found; capturing from the beginning.")
+
+    console.print(
+        "\n[bold]Ready to capture.[/bold]\n"
+        "  Navigate Kindle to the [bold]cover page[/bold] of the book,\n"
+        "  then press [bold]Enter[/bold] to start.\n"
+        "\n"
+        "[bold]キャプチャの準備ができました。[/bold]\n"
+        "  Kindle で本の[bold]表紙ページ[/bold]を表示してから、\n"
+        "  [bold]Enter[/bold] を押してください。\n"
+    )
+    click.pause(info="")
 
     try:
         _run_capture(config, pages_to_retry=pages_to_retry, key_code=key_code)
