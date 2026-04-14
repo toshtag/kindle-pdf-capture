@@ -48,6 +48,46 @@ class CropError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
+def _find_titlebar_bottom(bgr: np.ndarray, *, search_fraction: float = 0.25) -> int:
+    """Return the y-coordinate of the macOS title bar bottom edge only.
+
+    Uses Sobel Y to find the last full-width horizontal edge in the top
+    *search_fraction* of the image.  This is the boundary between the macOS
+    title bar and whatever is below (Kindle chrome, header band, or content).
+
+    Returns 0 if no such edge is found.
+    """
+    h_img, w_img = bgr.shape[:2]
+    search_h = max(1, int(h_img * search_fraction))
+
+    gray = cv2.cvtColor(bgr[:search_h], cv2.COLOR_BGR2GRAY)
+
+    sobel = cv2.Sobel(gray.astype(np.float64), cv2.CV_64F, 0, 1, ksize=3)
+    abs_sobel = np.abs(sobel)
+
+    edge_thresh = 20.0
+    edge_w = max(1, w_img // 20)  # leftmost / rightmost 5%
+
+    edge_mask = abs_sobel > edge_thresh
+    row_density = edge_mask.sum(axis=1) / w_img
+    left_density = edge_mask[:, :edge_w].sum(axis=1) / edge_w
+    right_density = edge_mask[:, w_img - edge_w :].sum(axis=1) / edge_w
+
+    min_span = 0.50
+    min_edge_span = 0.50
+    boundary_rows = (
+        (row_density >= min_span)
+        & (left_density >= min_edge_span)
+        & (right_density >= min_edge_span)
+    )
+
+    indices = np.where(boundary_rows)[0]
+    if len(indices) == 0:
+        return 0
+
+    return int(indices[-1]) + 1
+
+
 def _find_header_bottom(bgr: np.ndarray, *, search_fraction: float = 0.25) -> int:
     """Return the y-coordinate where book content starts, below the Kindle header.
 
@@ -381,6 +421,21 @@ def detect_content_region(
     """
     h_img, w_img = bgr.shape[:2]
 
+    gray_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    has_chrome = _has_dark_border(gray_full)
+
+    # Pass 1a: cover/image pages surrounded by Kindle chrome.  Return everything
+    # below the macOS title bar as-is — the dark chrome border IS part of the
+    # page visual and must not be trimmed by contour detection.
+    # Use _find_titlebar_bottom (Step 1 only) so the Kindle chrome below the
+    # title bar is NOT mistaken for a header band and skipped.
+    # Guard: skip if the frame has no bright pixels at all (all-black = screen
+    # recording blocked), so we still raise CropError in that degenerate case.
+    if has_chrome and float(gray_full.max()) > 20:
+        titlebar_y = _find_titlebar_bottom(bgr)
+        logger.debug("Cover/chrome page: returning full area below title bar (y=%d).", titlebar_y)
+        return ContentRegion(x=0, y=titlebar_y, w=w_img, h=h_img - titlebar_y)
+
     # Strip macOS title bar and Kindle header before content detection
     header_y = _find_header_bottom(bgr)
     if header_y > 0:
@@ -388,19 +443,6 @@ def detect_content_region(
         logger.debug("Stripped header: %d rows removed from top.", header_y)
     else:
         body = bgr
-
-    gray_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    has_chrome = _has_dark_border(gray_full)
-
-    # Pass 1a: cover/image pages surrounded by Kindle chrome.  Return everything
-    # below the macOS title bar as-is — the dark chrome border IS part of the
-    # page visual and must not be trimmed by contour detection.
-    # Guard: skip if the frame has no bright pixels at all (all-black = screen
-    # recording blocked), so we still raise CropError in that degenerate case.
-    if has_chrome and float(gray_full.max()) > 20:
-        content_y = header_y if header_y > 0 else 0
-        logger.debug("Cover/chrome page: returning full area below title bar (y=%d).", content_y)
-        return ContentRegion(x=0, y=content_y, w=w_img, h=h_img - content_y)
 
     # Pass 1b: reading-mode pages have no dark chrome border.  The full area
     # below the header IS the page — no contour detection needed.  This
