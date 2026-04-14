@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-04-14
+
+### Fixed
+
+- `--ocr-optimize` default changed from 2 to 1. Level 2/3 requires
+  `pngquant`, which is not installed by default and has no effect on
+  this tool's JPEG-only PDF pipeline. Level 1 (lossless) works without
+  any additional system dependency.
+
+### Changed
+
+- `--ocr-optimize` help text now notes that level 2/3 requires `pngquant`.
+- Troubleshooting guide (en): OCR section aligned with Japanese version —
+  `--debug` tip added.
+
 ## [1.0.0] - 2026-04-14
 
 ### Added
@@ -147,7 +162,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bilingual documentation (English and Japanese)
 - GitHub PR/issue templates, Dependabot, and security policy
 
-[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.2.0...v1.0.0
 [0.2.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.1.2...v0.1.3

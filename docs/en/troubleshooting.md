@@ -54,6 +54,7 @@ OCR failure is non-fatal by design. The non-OCR PDF is always produced.
 - Check the log for a warning line containing the return code.
 - Verify that `tesseract` and `ghostscript` are installed: `which tesseract && which gs`
 - Try running `ocrmypdf` directly on the PDF to see the full error output.
+- Add `--debug` to see detailed logs including the exact `ocrmypdf` exit code.
 
 ## Capturing wrong window
 
