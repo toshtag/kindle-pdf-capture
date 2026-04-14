@@ -672,9 +672,9 @@ class TestWindowResizeForCoverMatch:
     def test_resize_called_before_capture_loop(self, tmp_path: Path) -> None:
         """resize_kindle_window must be called once, before any page is captured.
 
-        Phase 0 checks _has_dark_border to detect the cover, then calls
+        Phase 0 strips the title bar via _find_header_bottom, then calls
         _detect_by_brightness to measure cover width. Both are mocked so the
-        test does not require a real dark-border frame.
+        test does not require a real cover frame.
         """
         from kindle_pdf_capture.cropper import ContentRegion
         from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
@@ -703,8 +703,8 @@ class TestWindowResizeForCoverMatch:
                 "kindle_pdf_capture.main.wait_for_render",
                 return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
             ),
-            # Phase 0: mock dark border check to True so resize path is taken
-            patch("kindle_pdf_capture.main._has_dark_border", return_value=True),
+            # Phase 0: mock title bar detection (0 = no title bar to strip)
+            patch("kindle_pdf_capture.cropper._find_header_bottom", return_value=0),
             # Phase 0: mock _detect_by_brightness to return cover_region
             patch(
                 "kindle_pdf_capture.cropper._detect_by_brightness",
@@ -760,8 +760,8 @@ class TestWindowResizeForCoverMatch:
                 "kindle_pdf_capture.main.wait_for_render",
                 return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
             ),
-            # Phase 0: mock dark border check and _detect_by_brightness
-            patch("kindle_pdf_capture.main._has_dark_border", return_value=True),
+            # Phase 0: mock title bar detection and _detect_by_brightness
+            patch("kindle_pdf_capture.cropper._find_header_bottom", return_value=0),
             patch(
                 "kindle_pdf_capture.cropper._detect_by_brightness",
                 return_value=cover_region,
