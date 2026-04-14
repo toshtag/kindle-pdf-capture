@@ -321,6 +321,99 @@ def _make_kindle_window_with_header(
 
 
 # ---------------------------------------------------------------------------
+# Helpers: real-world Kindle window layouts
+# ---------------------------------------------------------------------------
+
+
+def _make_reading_mode_page(
+    width: int = 2240,
+    height: int = 2358,
+    title_bar_height: int = 56,
+    header_height: int = 44,
+    divider_thickness: int = 2,
+) -> tuple[np.ndarray, int]:
+    """Build a synthetic Kindle reading-mode page (Retina 2x, mostly white).
+
+    Layout (top to bottom):
+      1. macOS title bar (light gray, value ~210)
+      2. Kindle header (light gray, book title text in center only)
+      3. Thin horizontal divider (dark gray, value ~30, spanning full width)
+      4. White content area with centered text block
+
+    The title bar and header are light-colored (not dark), matching real
+    captures where Kindle is in light mode.  The divider is the only
+    full-width dark band in the top 25% of the image.
+
+    Returns (bgr_image, expected_content_start_y).
+    """
+    img = np.full((height, width, 3), 255, dtype=np.uint8)
+
+    # macOS title bar: light gray (not dark — matches real Kindle in light mode)
+    img[:title_bar_height, :] = 210
+
+    # Kindle header: light gray with book title text only in center region
+    header_top = title_bar_height
+    header_bottom = header_top + header_height
+    img[header_top:header_bottom, :] = 220
+    # Book title text: dark, but only in center (not reaching edges)
+    title_x_start = width // 3
+    title_x_end = 2 * width // 3
+    text_y = header_top + 12
+    img[text_y : text_y + 16, title_x_start:title_x_end] = 40
+
+    # Divider: dark, full width (this is what we detect)
+    divider_y = header_bottom
+    img[divider_y : divider_y + divider_thickness, :] = 30
+
+    content_start = divider_y + divider_thickness
+
+    # Content: white with text block indented from both sides
+    # Text spans only inner 70% of width (realistic margin)
+    text_x = int(width * 0.15)
+    text_w = int(width * 0.70)
+    img = _draw_text_block(
+        img, x=text_x, y=content_start + 30, w=text_w, h=height - content_start - 80
+    )
+
+    return img, content_start
+
+
+def _make_dark_chrome_page(
+    width: int = 2240,
+    height: int = 2358,
+    chrome_border: int = 60,
+) -> tuple[np.ndarray, int]:
+    """Build a synthetic Kindle dark-chrome layout (book cover / embed mode).
+
+    Layout: near-black chrome surrounds all four sides of the image, with the
+    book page embedded as a bright rectangle in the center.  This matches real
+    Kindle captures where the chrome forms a border frame rather than just a
+    top band.
+
+    The chrome value (16) is slightly above the old threshold (15) but below
+    the new threshold (20), so it will now be correctly masked out.
+    """
+    img = np.zeros((height, width, 3), dtype=np.uint8)
+
+    # Near-black chrome on all four sides (value ~16, matches real captures)
+    img[:, :] = 16
+
+    # White page content in the center (inset by chrome_border on each side)
+    content_y = chrome_border
+    content_x = chrome_border
+    content_h = height - 2 * chrome_border
+    content_w = width - 2 * chrome_border
+    img[content_y : content_y + content_h, content_x : content_x + content_w] = 240
+
+    # Text in content area, indented further from page edges
+    text_x = content_x + int(content_w * 0.10)
+    text_w = int(content_w * 0.80)
+    img = _draw_text_block(img, x=text_x, y=content_y + 30, w=text_w, h=content_h - 60)
+
+    return img, content_y
+
+
+# ---------------------------------------------------------------------------
 # _find_header_bottom
 # ---------------------------------------------------------------------------
 
@@ -362,6 +455,44 @@ class TestFindHeaderBottom:
                 f"Failed for {w}x{h}: got {result}, expected ~{expected_y}"
             )
 
+    def test_detects_divider_in_light_mode_reading_page(self) -> None:
+        """Real-world reading mode: light-gray title bar + thin dark divider.
+
+        The title bar and header are light-colored (not dark).  The only full-
+        width dark band in the top 25% is the thin horizontal divider between
+        the Kindle header and the book content.
+        """
+        img, expected_y = _make_reading_mode_page()
+        result = _find_header_bottom(img)
+        assert abs(result - expected_y) <= 5, (
+            f"Reading-mode divider: got {result}, expected ~{expected_y}"
+        )
+
+    def test_returns_zero_for_dark_chrome_page(self) -> None:
+        """Dark-chrome layout has no thin divider in top 25%; should return 0.
+
+        The entire top portion is near-black chrome (hundreds of rows).
+        _find_header_bottom should NOT try to strip it — the brightness
+        pass in detect_content_region handles this case instead.
+        """
+        img, _ = _make_dark_chrome_page()
+        result = _find_header_bottom(img)
+        assert result == 0
+
+    def test_text_content_not_mistaken_for_divider(self) -> None:
+        """Text lines must NOT be detected as divider lines.
+
+        Text content is indented and does NOT span the full width including
+        both left and right edge strips.
+        """
+        img = _make_white_canvas(2240, 2358)
+        # Text block spanning only 70% of width (indented, realistic)
+        text_x = int(2240 * 0.15)
+        text_w = int(2240 * 0.70)
+        img = _draw_text_block(img, x=text_x, y=100, w=text_w, h=2000)
+        result = _find_header_bottom(img)
+        assert result == 0, f"Text incorrectly detected as divider; got {result}"
+
 
 # ---------------------------------------------------------------------------
 # detect_content_region: header stripping integration
@@ -390,3 +521,42 @@ class TestDetectContentRegionWithHeader:
         region = detect_content_region(img)
         assert region.y <= 100
         assert region.area >= 1200 * 900 * 0.20
+
+    def test_real_world_reading_mode_excludes_header(self) -> None:
+        """Real-world reading mode: header must be stripped before content detection.
+
+        Retina-scale (2240x2358), light-gray title bar, thin dark divider.
+        The content region must start below the divider.
+        """
+        img, content_start = _make_reading_mode_page()
+        region = detect_content_region(img)
+        # Must not include the Kindle header area
+        assert region.y >= content_start - 5, (
+            f"Header not stripped: region.y={region.y}, content_start={content_start}"
+        )
+
+    def test_real_world_reading_mode_does_not_raise(self) -> None:
+        """detect_content_region must not raise CropError for reading-mode pages.
+
+        Previously, mostly-white pages with no dark border caused Canny thresholds
+        to be too high (~165-255), resulting in CropError.
+        """
+        img, _ = _make_reading_mode_page()
+        # Must not raise
+        region = detect_content_region(img)
+        assert isinstance(region, ContentRegion)
+
+    def test_dark_chrome_page_does_not_raise(self) -> None:
+        """detect_content_region must not raise for dark-chrome (cover/embed) pages.
+
+        The Kindle chrome has value ~16, just above the threshold=15 cutoff.
+        The page content is brighter and must be detected correctly.
+        """
+        img, content_start = _make_dark_chrome_page()
+        # Must not raise
+        region = detect_content_region(img)
+        assert isinstance(region, ContentRegion)
+        # Content region must be below or at chrome boundary
+        assert region.y >= content_start - 20, (
+            f"Chrome included: region.y={region.y}, content_start={content_start}"
+        )
