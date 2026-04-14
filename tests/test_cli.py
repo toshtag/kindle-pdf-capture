@@ -794,3 +794,116 @@ class TestWindowResizeForCoverMatch:
         assert last["target_height"] == orig_h, (
             f"Restore height: expected {orig_h}, got {last['target_height']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# _apply_crop_lock unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestApplyCropLock:
+    """Unit tests for _apply_crop_lock.
+
+    This function stabilises the crop y-coordinate across reading-mode pages.
+    The first reading-mode page sets the lock; subsequent pages are clamped.
+    Cover/image pages (region.y == titlebar_y) are not affected.
+    """
+
+    def _make_region(self, x, y, w, h):
+        from kindle_pdf_capture.cropper import ContentRegion
+
+        return ContentRegion(x=x, y=y, w=w, h=h)
+
+    def _make_frame(self, w=1200, h=900):
+        return np.zeros((h, w, 3), dtype=np.uint8)
+
+    def test_first_reading_mode_page_sets_lock(self):
+        """First reading-mode page: locked_crop_y must be set to region.y."""
+        from kindle_pdf_capture.main import _apply_crop_lock
+
+        frame = self._make_frame(1200, 900)
+        titlebar_y = 55
+        # Reading-mode: full-width region with y > titlebar_y
+        region = self._make_region(x=0, y=130, w=1200, h=770)
+
+        new_region, new_lock = _apply_crop_lock(region, frame, titlebar_y, None)
+
+        assert new_lock == 130, f"Lock should be set to 130, got {new_lock}"
+        assert new_region.y == 130
+
+    def test_subsequent_page_clamped_to_lock(self):
+        """Second reading-mode page with different y: region.y must be clamped."""
+        from kindle_pdf_capture.main import _apply_crop_lock
+
+        frame = self._make_frame(1200, 900)
+        titlebar_y = 55
+        locked_crop_y = 130
+        # Same full-width, but y drifted by 3 pixels (header-detection variance)
+        region = self._make_region(x=0, y=133, w=1200, h=767)
+
+        new_region, new_lock = _apply_crop_lock(region, frame, titlebar_y, locked_crop_y)
+
+        assert new_lock == 130, "Lock must not change after first page"
+        assert new_region.y == 130, f"y must be clamped to 130, got {new_region.y}"
+        # h must be adjusted so the bottom stays at the frame bottom
+        assert new_region.h == 900 - 130, f"h must be {900 - 130}, got {new_region.h}"
+
+    def test_cover_page_not_locked(self):
+        """Cover/image page (region.y == titlebar_y): must not be locked."""
+        from kindle_pdf_capture.main import _apply_crop_lock
+
+        frame = self._make_frame(1200, 900)
+        titlebar_y = 55
+        # Cover page: region starts exactly at titlebar_y (only macOS bar stripped)
+        region = self._make_region(x=0, y=55, w=1200, h=845)
+
+        new_region, new_lock = _apply_crop_lock(region, frame, titlebar_y, None)
+
+        assert new_lock is None, "Cover page must not set locked_crop_y"
+        assert new_region.y == 55
+
+    def test_same_y_does_not_rebuild_region(self):
+        """If region.y already equals locked_crop_y, region must be returned as-is."""
+        from kindle_pdf_capture.main import _apply_crop_lock
+
+        frame = self._make_frame(1200, 900)
+        titlebar_y = 55
+        locked_crop_y = 130
+        region = self._make_region(x=0, y=130, w=1200, h=770)
+
+        new_region, new_lock = _apply_crop_lock(region, frame, titlebar_y, locked_crop_y)
+
+        assert new_region is region, "Region object must be the same when y matches lock"
+        assert new_lock == 130
+
+    def test_partial_width_region_not_locked(self):
+        """A region narrower than the full frame width must not trigger locking.
+
+        This handles image-only pages where detect_content_region returns a
+        sub-frame rect (e.g. a centred illustration narrower than the window).
+        """
+        from kindle_pdf_capture.main import _apply_crop_lock
+
+        frame = self._make_frame(1200, 900)
+        titlebar_y = 55
+        # Partial-width region (e.g. a centred cover illustration)
+        region = self._make_region(x=100, y=130, w=1000, h=770)  # w=1000 < frame w=1200
+
+        new_region, new_lock = _apply_crop_lock(region, frame, titlebar_y, None)
+
+        assert new_lock is None, "Partial-width region must not set locked_crop_y"
+
+    def test_lock_preserved_across_multiple_pages(self):
+        """Simulate three reading-mode pages; lock set on page 1, stable for 2 and 3."""
+        from kindle_pdf_capture.main import _apply_crop_lock
+
+        frame = self._make_frame(1200, 900)
+        titlebar_y = 55
+        locked = None
+
+        ys = [130, 132, 128]  # slight variance between pages
+        for i, y in enumerate(ys):
+            region = self._make_region(x=0, y=y, w=1200, h=900 - y)
+            region, locked = _apply_crop_lock(region, frame, titlebar_y, locked)
+            assert region.y == 130, f"Page {i+1}: y must be 130, got {region.y}"
+        assert locked == 130
