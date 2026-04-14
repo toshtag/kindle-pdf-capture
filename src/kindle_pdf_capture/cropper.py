@@ -133,9 +133,7 @@ def _find_header_bottom(bgr: np.ndarray) -> int:
     row_density = edge_mask.sum(axis=1) / w_img
     left_density = edge_mask[:, :edge_w].sum(axis=1) / edge_w
     right_density = edge_mask[:, w_img - edge_w :].sum(axis=1) / edge_w
-    boundary = (
-        (row_density >= 0.50) & (left_density >= 0.50) & (right_density >= 0.50)
-    )
+    boundary = (row_density >= 0.50) & (left_density >= 0.50) & (right_density >= 0.50)
     indices = np.where(boundary)[0]
     if len(indices) == 0:
         logger.debug("No title bar edge found in top %d rows", _tb_search_h)
