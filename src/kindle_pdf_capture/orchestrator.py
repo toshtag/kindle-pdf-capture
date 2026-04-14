@@ -37,6 +37,7 @@ class CaptureConfig:
     jpeg_quality: int = 80
     save_raw: bool = False
     start_delay: int = 3
+    pdf_dpi: float = 300.0
     ocr: bool = False
     ocr_lang: str = "jpn+eng"
     ocr_optimize: int = 2
