@@ -627,3 +627,28 @@ class TestDetectContentRegionWithHeader:
         assert region.y >= content_start - 20, (
             f"Chrome included: region.y={region.y}, content_start={content_start}"
         )
+
+    def test_reading_mode_returns_full_width_page_rect(self) -> None:
+        """Reading-mode pages (no dark chrome) must return the full-width page rect.
+
+        Real-world reading pages have no dark border — the entire area below the
+        Kindle header is the page content.  detect_content_region must return a
+        region that spans (nearly) the full image width, NOT just the text block
+        width, so that all pages produce the same-size output image regardless of
+        how much text is on the page.
+
+        Previously, the edge-detection pass returned a narrow text-block bounding
+        box, causing output width to vary from page to page.
+        """
+        img, content_start = _make_reading_mode_page()
+        h_img, w_img = img.shape[:2]
+
+        region = detect_content_region(img)
+
+        # Width must be close to full image width — at most 10% narrower.
+        assert region.w >= w_img * 0.90, (
+            f"Expected full-width region (>= {w_img * 0.90:.0f}px), "
+            f"got region.w={region.w} (image width={w_img})"
+        )
+        # Must still start below the header
+        assert region.y >= content_start - 5
