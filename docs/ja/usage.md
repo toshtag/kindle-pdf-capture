@@ -20,6 +20,8 @@ kpc --out output/my-book
 | `--jpeg-quality N` | 80 | JPEG 品質（1-95） |
 | `--save-raw` | オフ | トリミング前のスクリーンショットも保存 |
 | `--start-delay N` | 3 | キャプチャ開始までの待機時間（秒） |
+| `--direction DIR` | `right` | ページ送り方向: LTR は `right`、RTL（マンガ等）は `left` |
+| `--pdf-dpi N` | 300 | PDF ページサイズの DPI（300 で 1800 px = 6 インチ幅） |
 | `--ocr` | オフ | 生成した PDF に OCR を実行 |
 | `--ocr-lang LANG` | `jpn+eng` | Tesseract の言語指定 |
 | `--ocr-optimize N` | 2 | OCR 最適化レベル（0-3） |
@@ -55,6 +57,9 @@ kpc --out output/my-book --retry-failed
 ```bash
 # 最大 300 ページ、高品質でキャプチャ
 kpc --out output/my-book --max-pages 300 --jpeg-quality 90
+
+# 右から左に読む本（マンガ等）をキャプチャ
+kpc --out output/my-manga --direction left
 
 # OCR 付きでキャプチャ（日本語 + 英語）
 kpc --out output/my-book --ocr --ocr-lang jpn+eng

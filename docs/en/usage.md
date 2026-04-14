@@ -20,6 +20,8 @@ You have `--start-delay` seconds (default 3) to switch focus to Kindle before ca
 | `--jpeg-quality N` | 80 | JPEG quality 1-95 |
 | `--save-raw` | off | Also save uncropped screenshots |
 | `--start-delay N` | 3 | Seconds before capture starts |
+| `--direction DIR` | `right` | Page-advance direction: `right` for LTR, `left` for RTL (manga) |
+| `--pdf-dpi N` | 300 | DPI for PDF page sizing (300 maps 1800 px to 6 inches) |
 | `--ocr` | off | Run OCR on the assembled PDF |
 | `--ocr-lang LANG` | `jpn+eng` | Tesseract language string |
 | `--ocr-optimize N` | 2 | OCR optimization level 0-3 |
@@ -55,6 +57,9 @@ This reads `logs/failed_pages.json` and recaptures only those pages, leaving all
 ```bash
 # Capture up to 300 pages, high quality
 kpc --out output/my-book --max-pages 300 --jpeg-quality 90
+
+# Capture a right-to-left book (Japanese manga etc.)
+kpc --out output/my-manga --direction left
 
 # Capture with OCR (Japanese + English)
 kpc --out output/my-book --ocr --ocr-lang jpn+eng
