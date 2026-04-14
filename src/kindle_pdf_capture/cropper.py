@@ -1,9 +1,18 @@
 """Content-region detection for Kindle screenshots.
 
-Extracts the book-body rectangle from a full Kindle window capture using
-contour analysis, discarding UI chrome (title bar, page arrows, etc.).
+Extracts the book-body rectangle from a full Kindle window capture,
+discarding UI chrome (macOS title bar, Kindle header band).
 
 All functions operate on uint8 BGR ndarrays (OpenCV native format).
+
+## Function map
+
+  _find_titlebar_bottom(bgr, *, search_h)   -- Sobel scan for macOS title bar edge
+  _find_header_bottom(bgr)                  -- std-dev scan for Kindle book-title band
+  _has_dark_border(gray)                    -- guard: confirms dark Kindle chrome exists
+  _detect_by_brightness(bgr, ...)           -- Phase-0 cover-rect detection (uses above)
+  _clamp_region / _best_contour_region      -- geometry helpers for contour selection
+  detect_content_region(bgr)               -- PUBLIC: main crop entry point
 """
 
 from __future__ import annotations
@@ -22,7 +31,7 @@ class ContentRegion:
     """Bounding rectangle of the detected book-body area.
 
     Coordinates follow OpenCV convention: origin at top-left,
-    x → right, y → down.
+    x -> right, y -> down.
     """
 
     x: int
@@ -54,17 +63,19 @@ def _find_titlebar_bottom(
     search_fraction: float = 0.25,
     search_h: int | None = None,
 ) -> int:
-    """Return the y-coordinate of the macOS title bar bottom edge only.
+    """Return the y-coordinate of the macOS title bar bottom edge.
 
     Uses Sobel Y to find the last full-width horizontal edge in the search
     region.  The search region is either *search_h* rows (if provided) or
     the top *search_fraction* of the image.
 
-    A fixed *search_h* is preferred when the image contains Kindle chrome
-    below the title bar (header bands, divider lines) that would otherwise
-    be mistaken for the title bar boundary if included in the search region.
+    Pass ``search_h=60`` when the image contains Kindle chrome below the
+    title bar (header bands, divider lines) that would otherwise be mistaken
+    for the title bar boundary if included in the search region.  60 rows
+    is always enough to capture the macOS title bar (~y=55) while keeping
+    the Kindle header (~y=110+) outside the window.
 
-    Returns 0 if no such edge is found.
+    Returns 0 if no full-width edge is found.
     """
     h_img, w_img = bgr.shape[:2]
     if search_h is None:
@@ -73,74 +84,48 @@ def _find_titlebar_bottom(
         search_h = max(1, min(search_h, h_img))
 
     gray = cv2.cvtColor(bgr[:search_h], cv2.COLOR_BGR2GRAY)
-
     sobel = cv2.Sobel(gray.astype(np.float64), cv2.CV_64F, 0, 1, ksize=3)
     abs_sobel = np.abs(sobel)
 
     edge_thresh = 20.0
-    edge_w = max(1, w_img // 20)  # leftmost / rightmost 5%
+    edge_w = max(1, w_img // 20)  # leftmost / rightmost 5 %
 
     edge_mask = abs_sobel > edge_thresh
     row_density = edge_mask.sum(axis=1) / w_img
     left_density = edge_mask[:, :edge_w].sum(axis=1) / edge_w
     right_density = edge_mask[:, w_img - edge_w :].sum(axis=1) / edge_w
 
-    min_span = 0.50
-    min_edge_span = 0.50
-    boundary_rows = (
-        (row_density >= min_span)
-        & (left_density >= min_edge_span)
-        & (right_density >= min_edge_span)
-    )
-
+    boundary_rows = (row_density >= 0.50) & (left_density >= 0.50) & (right_density >= 0.50)
     indices = np.where(boundary_rows)[0]
     if len(indices) == 0:
         return 0
-
     return int(indices[-1]) + 1
 
 
 def _find_header_bottom(bgr: np.ndarray) -> int:
     """Return the y-coordinate immediately after the Kindle book-title text block.
 
-    The Kindle reading-mode header consists of:
-      1. macOS title bar — a full-width horizontal edge in the top 60 rows.
-      2. A short uniform-background band (Kindle chrome).
-      3. The book title text (non-uniform rows, centered only).
+    The Kindle reading-mode header consists of (top to bottom):
+      1. macOS title bar  -- detected by _find_titlebar_bottom(search_h=60).
+      2. Uniform chrome band (light-gray background, no text).
+      3. Book-title text  -- non-uniform rows (row std >= 10).
+      4. Divider / quiet band -- uniform again (row std < 5).  <-- return here
 
-    Detects the macOS title bar boundary by scanning only the top 60 rows
-    with Sobel Y (sufficient to catch the title bar, which is always in the
-    top ~5% of the image).  Then scans up to 100 rows further for the first
-    non-uniform band (std >= 10), which is the book-title text.  Returns the
-    first uniform row (std < 5) after that text block.
+    Scans up to 100 rows below the title bar for the text block, then
+    returns the first quiet row after it.
 
     Returns 0 if:
-      - no full-width edge is found in the top 60 rows, or
-      - no non-uniform block follows the title bar within 100 rows.
+      - no title bar edge is found in the top 60 rows, or
+      - no text block follows within 100 rows (non-reading-mode frame).
     """
-    h_img, w_img = bgr.shape[:2]
+    h_img = bgr.shape[0]
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
-    # Detect the macOS title bar bottom: scan only the top 60 rows so that
-    # Kindle header elements (title text at ~y=110, divider at ~y=126) are
-    # never included in the search window.
-    _tb_search_h = min(60, h_img)
-    sobel = cv2.Sobel(gray[:_tb_search_h].astype(np.float64), cv2.CV_64F, 0, 1, ksize=3)
-    abs_sobel = np.abs(sobel)
-    edge_thresh = 20.0
-    edge_w = max(1, w_img // 20)
-    edge_mask = abs_sobel > edge_thresh
-    row_density = edge_mask.sum(axis=1) / w_img
-    left_density = edge_mask[:, :edge_w].sum(axis=1) / edge_w
-    right_density = edge_mask[:, w_img - edge_w :].sum(axis=1) / edge_w
-    boundary = (row_density >= 0.50) & (left_density >= 0.50) & (right_density >= 0.50)
-    indices = np.where(boundary)[0]
-    if len(indices) == 0:
-        logger.debug("No title bar edge found in top %d rows", _tb_search_h)
+    titlebar_y = _find_titlebar_bottom(bgr, search_h=60)
+    if titlebar_y == 0:
+        logger.debug("_find_header_bottom: no title bar edge found")
         return 0
-    titlebar_y = int(indices[-1]) + 1
 
-    # Scan up to 100 rows below the title bar for the book-title text block.
     search_end = min(titlebar_y + 100, h_img)
     title_block_started = False
 
@@ -205,13 +190,19 @@ def _best_contour_region(
 def _has_dark_border(gray: np.ndarray, *, border_width: int = 20, threshold: int = 20) -> bool:
     """Return True when the image has a dark frame on at least two opposite sides.
 
-    Kindle wraps the page in a near-black background.  Checking that two
-    opposing edge strips (left+right or top+bottom) are predominantly dark
-    distinguishes a Kindle chrome border from a thin UI bar that only appears
-    at the top of the image.
+    Used exclusively as a pre-flight guard inside ``_detect_by_brightness``
+    (Phase-0 cover detection).  It is NOT used by ``detect_content_region``
+    -- that function switched to a brightness-sampling approach in v1.0.2
+    because the dark border disappears after Phase-0 resizes the window.
 
-    The threshold is set to 20 to capture Kindle chrome (typical value ~16-17)
-    while remaining below standard dark cover-page content (value ~40+).
+    Two opposing edge strips (left+right OR top+bottom) must be predominantly
+    dark (>= 80 % of pixels <= threshold) to return True.  This distinguishes
+    the full Kindle chrome border from a thin macOS UI bar that only appears
+    at the top.
+
+    Pixel value ranges:
+      - Kindle chrome background: ~16-17  (well below threshold=20)
+      - Dark cover-page content:  ~40+    (above threshold, not flagged as chrome)
     """
     h, w = gray.shape
     bw = min(border_width, w // 4, h // 4)
@@ -230,19 +221,22 @@ def _detect_by_brightness(
     margin: int,
     min_area_ratio: float,
 ) -> ContentRegion | None:
-    """Find the page region by thresholding away the dark Kindle chrome.
+    """Find the cover-page rect by thresholding away the dark Kindle chrome.
 
-    Kindle surrounds the book page with a near-black background.  Any pixel
-    brighter than a low threshold is considered part of the page.  Morphological
-    closing merges the page into a single blob from which the bounding box is
-    taken.
+    Used only in Phase 0 (window resize) to measure the book's natural page
+    width from the cover frame.  At this point the Kindle window still has
+    its original size and the cover page is surrounded by near-black chrome
+    (pixel value ~16-17).
 
-    This pass is only attempted when ``_has_dark_border`` confirms that two
-    opposing edges are predominantly dark, distinguishing the Kindle chrome
-    from an incidental UI bar.
+    Algorithm:
+      1. _has_dark_border confirms that two opposing edges are dark.
+         Returns None immediately if the border is absent (not a cover frame).
+      2. Threshold at 20: everything brighter is page content.
+      3. Morphological close (20x20) merges the page into one solid blob.
+      4. Largest qualifying contour -> bounding box = page rect.
 
-    Returns None when the image has no dark border, or when no qualifying
-    region is found (e.g. pure-black image).
+    Returns None when the dark border guard fails or no qualifying contour
+    is found (e.g. pure-black frame).
     """
     h_img, w_img = bgr.shape[:2]
     total_area = h_img * w_img
@@ -252,64 +246,11 @@ def _detect_by_brightness(
     if not _has_dark_border(gray):
         return None
 
-    # Use a threshold that captures dark cover pages (value ~40+) while
-    # excluding Kindle chrome (value ~16-17).  Threshold 20 sits between them.
     _, mask = cv2.threshold(gray, 20, 255, cv2.THRESH_BINARY)
-
-    # Close gaps so the page appears as one solid blob
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (20, 20))
     closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
     contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None
-
-    return _best_contour_region(
-        contours,
-        w_img=w_img,
-        h_img=h_img,
-        total_area=total_area,
-        min_area_ratio=min_area_ratio,
-        margin=margin,
-    )
-
-
-def _detect_by_edges(
-    bgr: np.ndarray,
-    *,
-    margin: int,
-    min_area_ratio: float,
-) -> ContentRegion | None:
-    """Detect the content region via Canny edge detection.
-
-    Used as a fallback when the brightness pass fails (e.g. a uniformly
-    bright image with no dark border).
-
-    For bright reading-mode pages, text lines produce many small, scattered
-    edge contours.  A large dilation kernel merges them into one coherent blob
-    before bounding-box extraction.
-
-    Returns None when no qualifying region is found.
-    """
-    h_img, w_img = bgr.shape[:2]
-    total_area = h_img * w_img
-
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    median_val = float(np.median(blurred))
-    low = max(0.0, 0.66 * median_val)
-    high = min(255.0, 1.33 * median_val)
-    if high - low < 10:
-        low, high = 30.0, 100.0
-    edges = cv2.Canny(blurred, low, high)
-
-    # Use a wide kernel to bridge gaps between scattered text-line edges so
-    # that all text content merges into a single contour blob.
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 20))
-    dilated = cv2.dilate(edges, kernel, iterations=3)
-
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
 
@@ -337,9 +278,6 @@ def detect_content_region(
 
     Decision flow
     -------------
-    The function walks through three distinct page types and returns the
-    tightest rectangle that includes all book content without any UI chrome.
-
     .. code-block:: text
 
         [frame]
@@ -347,10 +285,8 @@ def detect_content_region(
            ▼
         _find_titlebar_bottom(search_h=60)
            │   Sobel Y scan of top 60 rows only.
-           │   Returns the y just below the macOS title bar (~y=55).
-           │   Using a fixed 60-row window prevents Kindle header elements
-           │   (title text at ~y=110, divider at ~y=126) from being
-           │   mistaken for the title bar boundary.
+           │   Returns y just below the macOS title bar (~y=55).
+           │   Fixed 60-row window keeps Kindle header (~y=110+) out of scope.
            │
            ├─ guard: gray_full.max() <= 20 ──► CropError (all-black frame)
            │
@@ -358,38 +294,36 @@ def detect_content_region(
         below_titlebar_mean  (mean of rows [titlebar_y : titlebar_y+10])
            │
            ├─ mean < 200  ──► COVER / IMAGE PAGE
-           │                  Dark Kindle chrome surrounds the book page.
-           │                  Return full frame from titlebar_y downward.
+           │                  Dark Kindle chrome present; return full frame
+           │                  from titlebar_y downward.
            │                  ContentRegion(x=0, y=titlebar_y, w=w, h=h-titlebar_y)
            │
            └─ mean >= 200 ──► READING-MODE PAGE (light-gray Kindle header)
                               │
                               ▼
                            _find_header_bottom(bgr)
-                              │   Scans up to 100 rows below titlebar_y for the
-                              │   book-title text block (row std >= 10), then
-                              │   returns the first quiet row (std < 5) after it.
+                              │   _find_titlebar_bottom(search_h=60) to anchor,
+                              │   then std-dev scan for book-title text block.
+                              │   Returns first quiet row (std < 5) after text.
                               │
                               ├─ header_y > 0 ──► NORMAL READING PAGE
-                              │                   Kindle header band fully detected.
                               │                   content_y = max(titlebar_y, header_y - top_padding)
                               │                   ContentRegion(x=0, y=content_y, w=w, h=h-content_y)
                               │
                               └─ header_y == 0 ──► BRIGHT COVER / NO-HEADER PAGE
-                                                   Passes mean >= 200 but has no title text
-                                                   (e.g. a white cover illustration).
-                                                   Fall back to titlebar_y — same as cover path.
+                                                   White cover or image page that passes
+                                                   the mean-200 test but has no title text.
+                                                   Fall back to titlebar_y.
                                                    ContentRegion(x=0, y=titlebar_y, w=w, h=h-titlebar_y)
 
-    Why the mean-200 threshold?
-    ---------------------------
-    After Phase 0 resizes the window, the Kindle chrome around the cover
-    disappears (dark gutters reflow away).  We can no longer rely on a dark
-    border to distinguish covers from reading-mode pages.  Instead we check
-    the first 10 rows below the macOS title bar:
-      - Reading-mode header background: very light gray (mean ~230-250).
-      - Cover chrome / dark illustration: darker (mean < 200).
-    The threshold 200 sits safely between these two bands for all tested books.
+    Why mean-200 and not _has_dark_border?
+    ---------------------------------------
+    After Phase 0 resizes the window the dark chrome gutters disappear, so
+    _has_dark_border would always return False for subsequent pages.  Instead
+    we sample the 10 rows immediately below the macOS title bar:
+      - Reading-mode header background: ~230-250 (very light gray)
+      - Cover chrome / dark illustration: < 200
+    Threshold 200 sits safely between these two bands for all tested books.
 
     Args:
         bgr: uint8 BGR ndarray (OpenCV format).
@@ -402,32 +336,20 @@ def detect_content_region(
         CropError: Only if the frame is entirely black.
     """
     h_img, w_img = bgr.shape[:2]
-
     gray_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
-    # Guard: all-black frame (screen recording blocked) — raise CropError below.
     if float(gray_full.max()) <= 20:
         logger.debug("All-black frame; skipping all passes.")
         raise CropError("Frame is all-black — screen recording may be blocked.")
 
-    # Step 1: locate the macOS title bar bottom edge (Sobel only, no header scan).
-    # Scan only the top 60 rows — enough to find the macOS title bar (~y=55)
-    # while keeping the Kindle header band (title text at ~y=110+) outside the
-    # search window so it is never mistaken for the title bar boundary.
     titlebar_y = _find_titlebar_bottom(bgr, search_h=60)
 
-    # Step 2: decide whether to also strip the Kindle reading-mode header band.
-    # If the row immediately below the title bar is bright (mean ≥ 200), this is
-    # a reading-mode page with a light-gray Kindle header that must be stripped.
-    # If it is dark (cover chrome, image page), return the full frame from
-    # titlebar_y — the dark area is content and must not be trimmed further.
     below_titlebar_mean = (
         float(gray_full[titlebar_y : titlebar_y + 10].mean()) if titlebar_y < h_img else 255.0
     )
     is_reading_mode = below_titlebar_mean >= 200
 
     if not is_reading_mode:
-        # Cover / image page: return everything below the title bar.
         logger.debug(
             "Cover/image page (below-titlebar mean=%.1f): returning full frame from y=%d.",
             below_titlebar_mean,
@@ -435,10 +357,8 @@ def detect_content_region(
         )
         return ContentRegion(x=0, y=titlebar_y, w=w_img, h=h_img - titlebar_y)
 
-    # Reading-mode page: also strip the Kindle header band (title text + divider).
     header_y = _find_header_bottom(bgr)
     if header_y > 0:
-        # Crop from header_y (the row immediately after the book-title text).
         content_y = max(titlebar_y, header_y - top_padding)
         logger.debug(
             "Reading-mode page: returning full-width rect at y=%d (header_y=%d, titlebar_y=%d).",
@@ -448,31 +368,9 @@ def detect_content_region(
         )
         return ContentRegion(x=0, y=content_y, w=w_img, h=h_img - content_y)
 
-    # header_y == 0: no Kindle header band detected (e.g. cover/image pages
-    # that are bright enough to pass is_reading_mode but have no title text).
-    # Return everything below the title bar — same as the non-reading-mode path.
     logger.debug(
-        "No header found (reading-mode page, below-titlebar mean=%.1f): returning full frame from y=%d.",
+        "No header found (mean=%.1f): returning full frame from y=%d.",
         below_titlebar_mean,
         titlebar_y,
     )
     return ContentRegion(x=0, y=titlebar_y, w=w_img, h=h_img - titlebar_y)
-
-
-def fallback_crop(bgr: np.ndarray, *, fraction: float = 0.04) -> ContentRegion:
-    """Return a conservative crop removing *fraction* from each edge.
-
-    Used when detect_content_region fails.  Preserves most of the image
-    while cutting the most likely UI-chrome areas.
-
-    Args:
-        bgr: uint8 BGR ndarray.
-        fraction: Fraction of width/height to remove from each side (0-0.5).
-
-    Returns:
-        ContentRegion for the cropped area.
-    """
-    h_img, w_img = bgr.shape[:2]
-    dx = int(w_img * fraction)
-    dy = int(h_img * fraction)
-    return ContentRegion(x=dx, y=dy, w=w_img - 2 * dx, h=h_img - 2 * dy)
