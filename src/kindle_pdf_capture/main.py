@@ -88,9 +88,9 @@ def _run_capture(
         cover_frame = capture_window(window)
 
         # Strip the macOS title bar before measuring the cover page rect.
-        # Use a narrow search window (top 10%) to avoid mistaking Kindle chrome
-        # elements (divider lines, header bands) for the macOS title bar.
-        titlebar_y = _find_titlebar_bottom(cover_frame, search_fraction=0.10)
+        # Use a 60-row search window so Kindle chrome elements (header bands,
+        # divider lines below y=60) are not mistaken for the title bar boundary.
+        titlebar_y = _find_titlebar_bottom(cover_frame, search_h=60)
         cropped_cover = cover_frame[titlebar_y:] if titlebar_y > 0 else cover_frame
         log.info(
             "Cover frame %dx%d. Title bar bottom: y=%d.",
@@ -170,7 +170,7 @@ def _run_capture(
                 # larger y because the Kindle header band is also stripped.
                 # Distinguish dynamically: only lock when region.y exceeds the
                 # title-bar-only boundary measured from this frame.
-                titlebar_y = _find_titlebar_bottom(frame, search_fraction=0.10)
+                titlebar_y = _find_titlebar_bottom(frame, search_h=60)
                 if region.w == frame.shape[1] and region.y > titlebar_y:
                     if locked_crop_y is None:
                         locked_crop_y = region.y

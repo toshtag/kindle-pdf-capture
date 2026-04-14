@@ -48,17 +48,29 @@ class CropError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-def _find_titlebar_bottom(bgr: np.ndarray, *, search_fraction: float = 0.25) -> int:
+def _find_titlebar_bottom(
+    bgr: np.ndarray,
+    *,
+    search_fraction: float = 0.25,
+    search_h: int | None = None,
+) -> int:
     """Return the y-coordinate of the macOS title bar bottom edge only.
 
-    Uses Sobel Y to find the last full-width horizontal edge in the top
-    *search_fraction* of the image.  This is the boundary between the macOS
-    title bar and whatever is below (Kindle chrome, header band, or content).
+    Uses Sobel Y to find the last full-width horizontal edge in the search
+    region.  The search region is either *search_h* rows (if provided) or
+    the top *search_fraction* of the image.
+
+    A fixed *search_h* is preferred when the image contains Kindle chrome
+    below the title bar (header bands, divider lines) that would otherwise
+    be mistaken for the title bar boundary if included in the search region.
 
     Returns 0 if no such edge is found.
     """
     h_img, w_img = bgr.shape[:2]
-    search_h = max(1, int(h_img * search_fraction))
+    if search_h is None:
+        search_h = max(1, int(h_img * search_fraction))
+    else:
+        search_h = max(1, min(search_h, h_img))
 
     gray = cv2.cvtColor(bgr[:search_h], cv2.COLOR_BGR2GRAY)
 
@@ -92,29 +104,45 @@ def _find_header_bottom(bgr: np.ndarray) -> int:
     """Return the y-coordinate immediately after the Kindle book-title text block.
 
     The Kindle reading-mode header consists of:
-      1. macOS title bar — detected by _find_titlebar_bottom (Sobel Y peak).
+      1. macOS title bar — a full-width horizontal edge in the top 60 rows.
       2. A short uniform-background band (Kindle chrome).
       3. The book title text (non-uniform rows, centered only).
 
-    This function locates the macOS title bar bottom, then scans downward
-    (up to 100 rows) for the first non-uniform band (std >= 10), which is the
-    book-title text.  It returns the first uniform row (std < 5) after that
-    text block — the point where Kindle chrome ends and book content begins.
+    Detects the macOS title bar boundary by scanning only the top 60 rows
+    with Sobel Y (sufficient to catch the title bar, which is always in the
+    top ~5% of the image).  Then scans up to 100 rows further for the first
+    non-uniform band (std >= 10), which is the book-title text.  Returns the
+    first uniform row (std < 5) after that text block.
 
     Returns 0 if:
-      - no macOS title bar is detected (titlebar_y == 0), or
+      - no full-width edge is found in the top 60 rows, or
       - no non-uniform block follows the title bar within 100 rows.
     """
-    # Use a narrow search window (top 10%) so that Kindle chrome elements
-    # below the macOS title bar (divider lines, header bands) are excluded
-    # from the title-bar detection step.
-    titlebar_y = _find_titlebar_bottom(bgr, search_fraction=0.10)
-    if titlebar_y == 0:
-        return 0
-
-    h_img = bgr.shape[0]
+    h_img, w_img = bgr.shape[:2]
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
+    # Detect the macOS title bar bottom: scan only the top 60 rows so that
+    # Kindle header elements (title text at ~y=110, divider at ~y=126) are
+    # never included in the search window.
+    _tb_search_h = min(60, h_img)
+    sobel = cv2.Sobel(gray[:_tb_search_h].astype(np.float64), cv2.CV_64F, 0, 1, ksize=3)
+    abs_sobel = np.abs(sobel)
+    edge_thresh = 20.0
+    edge_w = max(1, w_img // 20)
+    edge_mask = abs_sobel > edge_thresh
+    row_density = edge_mask.sum(axis=1) / w_img
+    left_density = edge_mask[:, :edge_w].sum(axis=1) / edge_w
+    right_density = edge_mask[:, w_img - edge_w :].sum(axis=1) / edge_w
+    boundary = (
+        (row_density >= 0.50) & (left_density >= 0.50) & (right_density >= 0.50)
+    )
+    indices = np.where(boundary)[0]
+    if len(indices) == 0:
+        logger.debug("No title bar edge found in top %d rows", _tb_search_h)
+        return 0
+    titlebar_y = int(indices[-1]) + 1
+
+    # Scan up to 100 rows below the title bar for the book-title text block.
     search_end = min(titlebar_y + 100, h_img)
     title_block_started = False
 
@@ -353,9 +381,10 @@ def detect_content_region(
         raise CropError("Frame is all-black — screen recording may be blocked.")
 
     # Step 1: locate the macOS title bar bottom edge (Sobel only, no header scan).
-    # Use a narrow search window (top 10%) so that Kindle chrome elements such
-    # as header divider lines are not mistaken for the macOS title bar boundary.
-    titlebar_y = _find_titlebar_bottom(bgr, search_fraction=0.10)
+    # Scan only the top 60 rows — enough to find the macOS title bar (~y=55)
+    # while keeping the Kindle header band (title text at ~y=110+) outside the
+    # search window so it is never mistaken for the title bar boundary.
+    titlebar_y = _find_titlebar_bottom(bgr, search_h=60)
 
     # Step 2: decide whether to also strip the Kindle reading-mode header band.
     # If the row immediately below the title bar is bright (mean ≥ 200), this is
