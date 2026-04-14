@@ -346,15 +346,22 @@ def detect_content_region(
 ) -> ContentRegion:
     """Detect the main text-body region in a Kindle screenshot.
 
-    Two-pass strategy:
+    Three-pass strategy:
 
-    1. **Brightness pass**: threshold pixels above the near-black Kindle
-       background to isolate the page blob.  Works for both white-background
-       text pages and dark cover pages, as long as the page is brighter than
-       the surrounding chrome.
+    1. **Full-width page rect** (reading mode): when a Kindle header is
+       detected but no dark chrome border surrounds the image, the entire
+       area below the header is the page.  Returning the full frame width
+       ensures all reading-mode pages produce the same output size regardless
+       of how much text is on the page or where the text margins sit.
 
-    2. **Edge-detection fallback**: used when the brightness pass yields no
-       qualifying region (e.g. the entire image is bright with no dark border).
+    2. **Brightness pass**: threshold pixels above the near-black Kindle
+       background to isolate the page blob.  Works for cover pages and
+       embedded-chrome layouts where the page is brighter than the surrounding
+       chrome frame.
+
+    3. **Edge-detection fallback**: used when the brightness pass yields no
+       qualifying region (e.g. the entire image is bright with no dark border
+       and no header was detected).
 
     Args:
         bgr: uint8 BGR ndarray (OpenCV format).
@@ -366,8 +373,10 @@ def detect_content_region(
         ContentRegion describing the detected body area.
 
     Raises:
-        CropError: If neither pass finds a suitable region.
+        CropError: If no suitable region is found.
     """
+    h_img, w_img = bgr.shape[:2]
+
     # Strip macOS title bar and Kindle header before content detection
     header_y = _find_header_bottom(bgr)
     if header_y > 0:
@@ -375,6 +384,14 @@ def detect_content_region(
         logger.debug("Stripped header: %d rows removed from top.", header_y)
     else:
         body = bgr
+
+    # Pass 1: reading-mode pages have no dark chrome border.  The full area
+    # below the header IS the page — no contour detection needed.  This
+    # guarantees a consistent full-frame width for every reading-mode page.
+    gray_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    if header_y > 0 and not _has_dark_border(gray_full):
+        logger.debug("Reading-mode page: returning full-width rect below header (y=%d).", header_y)
+        return ContentRegion(x=0, y=header_y, w=w_img, h=h_img - header_y)
 
     region = _detect_by_brightness(body, margin=margin, min_area_ratio=min_area_ratio)
     if region is not None:
@@ -406,7 +423,6 @@ def detect_content_region(
     # This preserves the header-stripping benefit even when content detection
     # cannot isolate a precise bounding box.
     if header_y > 0:
-        h_img, w_img = bgr.shape[:2]
         logger.debug("Both passes failed; returning full area below header (y=%d).", header_y)
         return ContentRegion(x=0, y=header_y, w=w_img, h=h_img - header_y)
 
