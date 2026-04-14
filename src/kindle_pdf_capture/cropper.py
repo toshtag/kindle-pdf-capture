@@ -88,124 +88,48 @@ def _find_titlebar_bottom(bgr: np.ndarray, *, search_fraction: float = 0.25) -> 
     return int(indices[-1]) + 1
 
 
-def _find_header_bottom(bgr: np.ndarray, *, search_fraction: float = 0.25) -> int:
-    """Return the y-coordinate where book content starts, below the Kindle header.
+def _find_header_bottom(bgr: np.ndarray) -> int:
+    """Return the y-coordinate immediately after the Kindle book-title text block.
 
-    Strategy:
-    1. Scan the top *search_fraction* of the image with a Sobel Y filter to
-       detect horizontal edges that span the full image width (including left
-       and right edge strips).  Such a full-width edge marks a UI boundary
-       (e.g. the line between the macOS title bar and the Kindle header area).
-    2. After the last full-width edge, skip any uniform rows (very low std)
-       that form the Kindle header background band.
-    3. Return the first row where text content begins (std rises above a
-       threshold, indicating black text on the light background).
+    The Kindle reading-mode header consists of:
+      1. macOS title bar — detected by _find_titlebar_bottom (Sobel Y peak).
+      2. A short uniform-background band (Kindle chrome).
+      3. The book title text (non-uniform rows, centered only).
 
-    Text lines are NOT mistaken for the UI boundary because text content is
-    always indented — it does not extend to the leftmost and rightmost 5% of
-    the image.
+    This function locates the macOS title bar bottom, then scans downward
+    (up to 100 rows) for the first non-uniform band (std >= 10), which is the
+    book-title text.  It returns the first uniform row (std < 5) after that
+    text block — the point where Kindle chrome ends and book content begins.
 
-    Returns 0 if no UI boundary is found in the search region.
+    Returns 0 if:
+      - no macOS title bar is detected (titlebar_y == 0), or
+      - no non-uniform block follows the title bar within 100 rows.
     """
-    h_img, w_img = bgr.shape[:2]
-    search_h = max(1, int(h_img * search_fraction))
+    # Use a narrow search window (top 10%) so that Kindle chrome elements
+    # below the macOS title bar (divider lines, header bands) are excluded
+    # from the title-bar detection step.
+    titlebar_y = _find_titlebar_bottom(bgr, search_fraction=0.10)
+    if titlebar_y == 0:
+        return 0
 
-    gray = cv2.cvtColor(bgr[:search_h], cv2.COLOR_BGR2GRAY)
+    h_img = bgr.shape[0]
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
-    # --- Step 1: find full-width horizontal edges via Sobel Y ---
-    sobel = cv2.Sobel(gray.astype(np.float64), cv2.CV_64F, 0, 1, ksize=3)
-    abs_sobel = np.abs(sobel)
+    search_end = min(titlebar_y + 100, h_img)
+    title_block_started = False
 
-    edge_thresh = 20.0
-    edge_w = max(1, w_img // 20)  # leftmost / rightmost 5%
-
-    edge_mask = abs_sobel > edge_thresh
-    row_density = edge_mask.sum(axis=1) / w_img
-    left_density = edge_mask[:, :edge_w].sum(axis=1) / edge_w
-    right_density = edge_mask[:, w_img - edge_w :].sum(axis=1) / edge_w
-
-    # A row qualifies as a UI boundary edge if its horizontal-edge response
-    # spans at least 50% of the image width AND reaches both edge strips.
-    # Text content is always indented so edge strips have low Sobel response.
-    min_span = 0.50
-    min_edge_span = 0.50  # higher threshold to exclude text lines near page edges
-    boundary_rows = (
-        (row_density >= min_span)
-        & (left_density >= min_edge_span)
-        & (right_density >= min_edge_span)
-    )
-
-    indices = np.where(boundary_rows)[0]
-    if len(indices) == 0:
-        return 0  # no UI boundary found
-
-    # Take the lowest qualifying row as the end of the boundary edge band
-    last_boundary_row = int(indices[-1])
-
-    # --- Step 2: skip the Kindle header band below the boundary edge ---
-    # The Kindle header (book title + background) consists of:
-    #   (a) Uniform gray rows (std < 5, mean < 250) — the header fill colour.
-    #   (b) Centered title-text rows (non-uniform, but edges don't reach the
-    #       left / right 5% strips).
-    # Content begins at the first row that is either:
-    #   • White / near-white and uniform (mean ≥ 250) — white page background.
-    #   • Non-uniform with Sobel edges reaching both edge strips — indented text.
-    uniform_std_thresh = 5.0
-    min_block_len = 10
-    header_mean_max = 250.0  # rows brighter than this are white content
-    edge_w2 = edge_w  # reuse the 5% strip width computed above
-
-    scan_start = last_boundary_row + 1
-    scan_gray = gray[scan_start:]
-    row_stds = scan_gray.std(axis=1)
-    row_means = scan_gray.mean(axis=1)
-
-    content_start = scan_start  # fallback: right after the boundary edge
-
-    i = 0
-    while i < len(row_stds):
-        is_uniform = row_stds[i] < uniform_std_thresh
-        is_gray_header = is_uniform and row_means[i] < header_mean_max
-
-        if is_gray_header:
-            # Uniform gray row: count the full block length.
-            j = i + 1
-            while (
-                j < len(row_stds)
-                and row_stds[j] < uniform_std_thresh
-                and row_means[j] < header_mean_max
-            ):
-                j += 1
-            block_len = j - i
-            if block_len >= min_block_len:
-                # Long enough to be a header background band; advance past it.
-                content_start = scan_start + j
-                i = j
-            else:
-                # Short gray patch — not a header band; stop here.
-                break
-        elif is_uniform:
-            # Uniform and bright (mean ≥ 250) — white page content; stop.
-            break
+    for y in range(titlebar_y, search_end):
+        row_std = float(gray[y].std())
+        if not title_block_started:
+            if row_std >= 10.0:
+                title_block_started = True
         else:
-            # Non-uniform row: centered title text or book content.
-            # Check whether Sobel edges reach the left / right edge strips.
-            abs_row_idx = scan_start + i
-            if abs_row_idx < abs_sobel.shape[0]:
-                left_act = (abs_sobel[abs_row_idx, :edge_w2] > edge_thresh).mean()
-                right_act = (abs_sobel[abs_row_idx, w_img - edge_w2 :] > edge_thresh).mean()
-                if left_act >= 0.3 or right_act >= 0.3:
-                    # Edges reach the strip — book content row; stop.
-                    break
-            # Edges don't reach strips — centered title text; skip it.
-            i += 1
+            if row_std < 5.0:
+                logger.debug("Header bottom at y=%d (titlebar_y=%d)", y, titlebar_y)
+                return y
 
-    logger.debug(
-        "Header boundary edge at row %d; content starts at %d",
-        last_boundary_row,
-        content_start,
-    )
-    return content_start
+    logger.debug("No header bottom found after titlebar_y=%d", titlebar_y)
+    return 0
 
 
 def _clamp_region(
@@ -429,8 +353,9 @@ def detect_content_region(
         raise CropError("Frame is all-black — screen recording may be blocked.")
 
     # Step 1: locate the macOS title bar bottom edge (Sobel only, no header scan).
-    # This is the only UI element we always strip regardless of page type.
-    titlebar_y = _find_titlebar_bottom(bgr)
+    # Use a narrow search window (top 10%) so that Kindle chrome elements such
+    # as header divider lines are not mistaken for the macOS title bar boundary.
+    titlebar_y = _find_titlebar_bottom(bgr, search_fraction=0.10)
 
     # Step 2: decide whether to also strip the Kindle reading-mode header band.
     # If the row immediately below the title bar is bright (mean ≥ 200), this is
@@ -460,12 +385,14 @@ def detect_content_region(
         body = bgr
 
     if header_y > 0:
-        safe_padding = min(top_padding, header_y // 2)
-        content_y = header_y - safe_padding
+        # Pad upward from header_y, but never above the macOS title bar bottom.
+        safe_padding = min(top_padding, header_y - titlebar_y, header_y // 2)
+        content_y = max(titlebar_y, header_y - safe_padding)
         logger.debug(
-            "Reading-mode page: returning full-width rect at y=%d (header_y=%d, padding=%d).",
+            "Reading-mode page: returning full-width rect at y=%d (header_y=%d, titlebar_y=%d, padding=%d).",
             content_y,
             header_y,
+            titlebar_y,
             safe_padding,
         )
         return ContentRegion(x=0, y=content_y, w=w_img, h=h_img - content_y)
@@ -500,11 +427,12 @@ def detect_content_region(
     # This preserves the header-stripping benefit even when content detection
     # cannot isolate a precise bounding box.
     if header_y > 0:
-        safe_padding = min(top_padding, header_y // 2)
-        content_y = header_y - safe_padding
+        safe_padding = min(top_padding, header_y - titlebar_y, header_y // 2)
+        content_y = max(titlebar_y, header_y - safe_padding)
         logger.debug(
-            "Both passes failed; returning full area below header (y=%d, padding=%d).",
+            "Both passes failed; returning full area below header (y=%d, titlebar_y=%d, padding=%d).",
             header_y,
+            titlebar_y,
             safe_padding,
         )
         return ContentRegion(x=0, y=content_y, w=w_img, h=h_img - content_y)
