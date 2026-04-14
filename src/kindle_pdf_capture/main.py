@@ -78,11 +78,19 @@ def _run_capture(
     window = find_kindle_window()
     focus_window(window)
 
+    session = CaptureSession(config)
+
+    if config.start_delay > 0:
+        log.info("Starting in %d s — switch to Kindle now.", config.start_delay)
+        time.sleep(config.start_delay)
+
     # --- Phase 0: detect cover page rect, resize window to match ---
     # Capture the cover (dark-chrome bordered) page to measure the book page
     # width, then resize the window so all body pages render at the same width.
     # Only resize when the current frame actually shows a dark-chrome layout;
     # if Kindle is already showing a body page (no chrome), skip the resize.
+    # This runs AFTER start_delay so the user has already switched to Kindle
+    # and the correct page (cover) is visible.
     orig_window_size: tuple[int, int] | None = None
     try:
         import cv2 as _cv2
@@ -116,12 +124,6 @@ def _run_capture(
             log.debug("First frame has no dark chrome border; skipping cover-based resize.")
     except Exception as exc:
         log.warning("Cover-based window resize failed: %s — continuing at current size.", exc)
-
-    session = CaptureSession(config)
-
-    if config.start_delay > 0:
-        log.info("Starting in %d s — switch to Kindle now.", config.start_delay)
-        time.sleep(config.start_delay)
 
     page_num = 1
 
