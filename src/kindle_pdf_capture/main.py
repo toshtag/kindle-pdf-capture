@@ -325,9 +325,9 @@ def _run_capture(
 )
 @click.option(
     "--ocr-optimize",
-    default=2,
+    default=1,
     show_default=True,
-    help="ocrmypdf --optimize level (0-3).",
+    help="ocrmypdf --optimize level (0-3). Level 2/3 requires pngquant (not needed for this tool's JPEG-only pipeline).",
 )
 @click.option(
     "--retry-failed",
