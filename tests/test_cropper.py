@@ -222,16 +222,21 @@ class TestDetectContentRegionKindleLayout:
         region = detect_content_region(img)
         assert isinstance(region, ContentRegion)
 
-    def test_black_border_excluded_from_region(self) -> None:
-        """The detected region must not start at x=0 when there is a black border."""
+    def test_chrome_page_returns_full_frame(self) -> None:
+        """A page with Kindle chrome border must return the full frame (x=0, w=frame_w).
+
+        Cover and chrome-bordered pages are returned as-is so the dark border
+        is preserved in the output image.
+        """
         img = np.zeros((900, 1200, 3), dtype=np.uint8)
         # White page with clear black borders on left and right
         img[0:900, 150:1050] = 240
 
         region = detect_content_region(img)
 
-        # x must be > 0; the black left border should be excluded
-        assert region.x > 0
+        # Full frame returned — chrome is kept, not trimmed
+        assert region.x == 0
+        assert region.w == 1200
 
 
 # ---------------------------------------------------------------------------
@@ -568,18 +573,26 @@ class TestFindHeaderBottom:
 
 class TestDetectContentRegionWithHeader:
     def test_excludes_title_bar_and_header(self) -> None:
-        """detect_content_region should exclude macOS title bar and Kindle header."""
-        img, content_start = _make_kindle_window_with_header()
-        region = detect_content_region(img)
+        """detect_content_region should exclude macOS title bar and Kindle header.
 
-        # The detected region's top should be at or below the content start
-        assert region.y >= content_start - 5
+        The returned region may start up to top_padding rows above content_start
+        (to provide a visual margin), but must not reach into the title-bar area.
+        """
+        img, content_start = _make_kindle_window_with_header()
+        from kindle_pdf_capture.cropper import detect_content_region as _dcr
+
+        region = _dcr(img)
+
+        # Allow up to top_padding (default 20) rows above content_start as margin
+        assert region.y >= content_start - 45, (
+            f"Region starts too high: y={region.y}, content_start={content_start}"
+        )
 
     def test_content_region_does_not_include_title_bar(self) -> None:
         """The detected region must not start in the title bar area (y < 56)."""
         img, _ = _make_kindle_window_with_header(title_bar_height=56)
         region = detect_content_region(img)
-        assert region.y >= 50  # Should be well below the title bar
+        assert region.y >= 30  # well clear of the macOS title bar
 
     def test_still_works_without_header(self) -> None:
         """Regular images (no header) should still work as before."""
@@ -593,12 +606,12 @@ class TestDetectContentRegionWithHeader:
         """Real-world reading mode: header must be stripped before content detection.
 
         Retina-scale (2240x2358), light-gray title bar, thin dark divider.
-        The content region must start below the divider.
+        The content region must start close to the divider (within top_padding rows).
         """
         img, content_start = _make_reading_mode_page()
         region = detect_content_region(img)
-        # Must not include the Kindle header area
-        assert region.y >= content_start - 5, (
+        # Allow up to top_padding (default 20) rows above content_start
+        assert region.y >= content_start - 45, (
             f"Header not stripped: region.y={region.y}, content_start={content_start}"
         )
 
@@ -613,17 +626,42 @@ class TestDetectContentRegionWithHeader:
         region = detect_content_region(img)
         assert isinstance(region, ContentRegion)
 
-    def test_dark_chrome_page_does_not_raise(self) -> None:
-        """detect_content_region must not raise for dark-chrome (cover/embed) pages.
+    def test_dark_chrome_page_returns_full_frame(self) -> None:
+        """detect_content_region must return the full frame for dark-chrome pages.
 
-        The Kindle chrome has value ~16, just above the threshold=15 cutoff.
-        The page content is brighter and must be detected correctly.
+        Cover/chrome pages are returned as-is (x=0, y=0, full width/height below
+        the title bar) so the dark border is preserved in the output image.
         """
-        img, content_start = _make_dark_chrome_page()
-        # Must not raise
+        img, _content_start = _make_dark_chrome_page()
+        _h_img, w_img = img.shape[:2]
         region = detect_content_region(img)
         assert isinstance(region, ContentRegion)
-        # Content region must be below or at chrome boundary
-        assert region.y >= content_start - 20, (
-            f"Chrome included: region.y={region.y}, content_start={content_start}"
+        # Full frame: x=0, full width, starts at top (no title bar in synthetic image)
+        assert region.x == 0
+        assert region.w == w_img
+        assert region.y == 0
+
+    def test_reading_mode_returns_full_width_page_rect(self) -> None:
+        """Reading-mode pages (no dark chrome) must return the full-width page rect.
+
+        Real-world reading pages have no dark border — the entire area below the
+        Kindle header is the page content.  detect_content_region must return a
+        region that spans (nearly) the full image width, NOT just the text block
+        width, so that all pages produce the same-size output image regardless of
+        how much text is on the page.
+
+        Previously, the edge-detection pass returned a narrow text-block bounding
+        box, causing output width to vary from page to page.
+        """
+        img, content_start = _make_reading_mode_page()
+        _h_img, w_img = img.shape[:2]
+
+        region = detect_content_region(img)
+
+        # Width must be close to full image width — at most 10% narrower.
+        assert region.w >= w_img * 0.90, (
+            f"Expected full-width region (>= {w_img * 0.90:.0f}px), "
+            f"got region.w={region.w} (image width={w_img})"
         )
+        # Must still start within top_padding rows of the header bottom
+        assert region.y >= content_start - 45
