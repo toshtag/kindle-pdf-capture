@@ -429,9 +429,7 @@ class TestFindHeaderBottom:
         img, _ = _make_kindle_window_with_header()
         result = _find_header_bottom(img)
         # Title text ends around row 80; allow a small tolerance
-        assert 75 <= result <= 90, (
-            f"Expected title-block end ~80, got {result}"
-        )
+        assert 75 <= result <= 90, f"Expected title-block end ~80, got {result}"
 
     def test_returns_zero_when_no_title_block_follows_titlebar(self) -> None:
         """When there is no book-title text directly after the title bar, return 0.
@@ -472,12 +470,8 @@ class TestFindHeaderBottom:
         img, _ = _make_reading_mode_page()
         result = _find_header_bottom(img)
         # Title bar bottom is at 56; result must be past the title text (~84)
-        assert result > 56, (
-            f"Expected > 56 (past the title bar), got {result}"
-        )
-        assert result <= 120, (
-            f"Expected <= 120 (before deep content), got {result}"
-        )
+        assert result > 56, f"Expected > 56 (past the title bar), got {result}"
+        assert result <= 120, f"Expected <= 120 (before deep content), got {result}"
 
     def test_consistent_across_window_sizes(self) -> None:
         """Result scales with window size — always returns row after title text."""
@@ -485,12 +479,8 @@ class TestFindHeaderBottom:
             img, _ = _make_kindle_window_with_header(width=w, height=h)
             result = _find_header_bottom(img)
             # Must be > title_bar_height (56) and < 200
-            assert result > 56, (
-                f"{w}x{h}: expected > 56, got {result}"
-            )
-            assert result < 200, (
-                f"{w}x{h}: expected < 200, got {result}"
-            )
+            assert result > 56, f"{w}x{h}: expected > 56, got {result}"
+            assert result < 200, f"{w}x{h}: expected < 200, got {result}"
 
 
 # ---------------------------------------------------------------------------
