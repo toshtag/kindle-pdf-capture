@@ -470,23 +470,23 @@ class TestFindHeaderBottom:
         """Real-world reading-mode page: title bar (light gray) + title text.
 
         Layout (_make_reading_mode_page, width=2240, title_bar=56, header=44):
-          - macOS title bar: light gray (value 210), rows 0-101
-            (Sobel Y search_h = min(h*0.10, 120) = 120; peak at row 101)
-          - Kindle header background (value 220), rows 102-113
-          - Book title text (dark, centered only), rows 114-129
-          - More uniform header background + divider, rows 130+
+          - macOS title bar: light gray (value 210), rows 0-55
+            (_find_header_bottom scans only top 60 rows; peak at row 55 → titlebar_y=56)
+          - Kindle header background (value 220), rows 56-67
+          - Book title text (dark, centered only), rows 68-83
+          - More uniform header background + divider, rows 84+
 
-        _find_header_bottom detects the title text block and returns the first
-        uniform row after it (around row 144).
+        _find_header_bottom returns the first uniform row after the title text
+        (row 84).
         """
         img, _ = _make_reading_mode_page()
         result = _find_header_bottom(img)
-        # Title bar bottom is at 102; result must be above deep content (row 200)
-        assert result > 102, (
-            f"Expected > 102 (past the title bar), got {result}"
+        # Title bar bottom is at 56; result must be past the title text (~84)
+        assert result > 56, (
+            f"Expected > 56 (past the title bar), got {result}"
         )
-        assert result <= 160, (
-            f"Expected <= 160 (before deep content), got {result}"
+        assert result <= 120, (
+            f"Expected <= 120 (before deep content), got {result}"
         )
 
     def test_consistent_across_window_sizes(self) -> None:
