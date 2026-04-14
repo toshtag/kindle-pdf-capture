@@ -102,7 +102,63 @@ def _find_header_bottom(bgr: np.ndarray, *, search_fraction: float = 0.25) -> in
     # Take the lowest qualifying row as the end of the boundary edge band
     last_boundary_row = int(indices[-1])
 
-    content_start = last_boundary_row + 1
+    # --- Step 2: skip the Kindle header band below the boundary edge ---
+    # The Kindle header (book title + background) consists of:
+    #   (a) Uniform gray rows (std < 5, mean < 250) — the header fill colour.
+    #   (b) Centered title-text rows (non-uniform, but edges don't reach the
+    #       left / right 5% strips).
+    # Content begins at the first row that is either:
+    #   • White / near-white and uniform (mean ≥ 250) — white page background.
+    #   • Non-uniform with Sobel edges reaching both edge strips — indented text.
+    uniform_std_thresh = 5.0
+    min_block_len = 10
+    header_mean_max = 250.0  # rows brighter than this are white content
+    edge_w2 = edge_w  # reuse the 5% strip width computed above
+
+    scan_start = last_boundary_row + 1
+    scan_gray = gray[scan_start:]
+    row_stds = scan_gray.std(axis=1)
+    row_means = scan_gray.mean(axis=1)
+
+    content_start = scan_start  # fallback: right after the boundary edge
+
+    i = 0
+    while i < len(row_stds):
+        is_uniform = row_stds[i] < uniform_std_thresh
+        is_gray_header = is_uniform and row_means[i] < header_mean_max
+
+        if is_gray_header:
+            # Uniform gray row: count the full block length.
+            j = i + 1
+            while (
+                j < len(row_stds)
+                and row_stds[j] < uniform_std_thresh
+                and row_means[j] < header_mean_max
+            ):
+                j += 1
+            block_len = j - i
+            if block_len >= min_block_len:
+                # Long enough to be a header background band; advance past it.
+                content_start = scan_start + j
+                i = j
+            else:
+                # Short gray patch — not a header band; stop here.
+                break
+        elif is_uniform:
+            # Uniform and bright (mean ≥ 250) — white page content; stop.
+            break
+        else:
+            # Non-uniform row: centered title text or book content.
+            # Check whether Sobel edges reach the left / right edge strips.
+            abs_row_idx = scan_start + i
+            if abs_row_idx < abs_sobel.shape[0]:
+                left_act = (abs_sobel[abs_row_idx, :edge_w2] > edge_thresh).mean()
+                right_act = (abs_sobel[abs_row_idx, w_img - edge_w2 :] > edge_thresh).mean()
+                if left_act >= 0.3 or right_act >= 0.3:
+                    # Edges reach the strip — book content row; stop.
+                    break
+            # Edges don't reach strips — centered title text; skip it.
+            i += 1
 
     logger.debug(
         "Header boundary edge at row %d; content starts at %d",
