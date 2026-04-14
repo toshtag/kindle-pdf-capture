@@ -83,20 +83,20 @@ def _run_capture(
     # Requires the cover page (dark-chrome bordered) to be visible in Kindle.
     orig_window_size: tuple[int, int] | None = None
     try:
-        from kindle_pdf_capture.cropper import _detect_by_brightness, _find_header_bottom
+        from kindle_pdf_capture.cropper import _detect_by_brightness, _find_titlebar_bottom
 
         cover_frame = capture_window(window)
 
         # Strip the macOS title bar before measuring the cover page rect.
-        # The title bar is white and causes _detect_by_brightness to treat the
-        # entire frame as the "page" bounding box.
-        header_y = _find_header_bottom(cover_frame)
-        cropped_cover = cover_frame[header_y:] if header_y > 0 else cover_frame
+        # Use _find_titlebar_bottom (Sobel Step 1 only) so the dark Kindle
+        # chrome below the title bar is not mistaken for a header band.
+        titlebar_y = _find_titlebar_bottom(cover_frame)
+        cropped_cover = cover_frame[titlebar_y:] if titlebar_y > 0 else cover_frame
         log.info(
             "Cover frame %dx%d. Title bar bottom: y=%d.",
             cover_frame.shape[1],
             cover_frame.shape[0],
-            header_y,
+            titlebar_y,
         )
 
         cover_region = _detect_by_brightness(cropped_cover, margin=0, min_area_ratio=0.10)
