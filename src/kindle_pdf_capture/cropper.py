@@ -422,21 +422,36 @@ def detect_content_region(
     h_img, w_img = bgr.shape[:2]
 
     gray_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    has_chrome = _has_dark_border(gray_full)
 
-    # Pass 1a: cover/image pages surrounded by Kindle chrome.  Return everything
-    # below the macOS title bar as-is — the dark chrome border IS part of the
-    # page visual and must not be trimmed by contour detection.
-    # Use _find_titlebar_bottom (Step 1 only) so the Kindle chrome below the
-    # title bar is NOT mistaken for a header band and skipped.
-    # Guard: skip if the frame has no bright pixels at all (all-black = screen
-    # recording blocked), so we still raise CropError in that degenerate case.
-    if has_chrome and float(gray_full.max()) > 20:
-        titlebar_y = _find_titlebar_bottom(bgr)
-        logger.debug("Cover/chrome page: returning full area below title bar (y=%d).", titlebar_y)
+    # Guard: all-black frame (screen recording blocked) — raise CropError below.
+    if float(gray_full.max()) <= 20:
+        logger.debug("All-black frame; skipping all passes.")
+        raise CropError("Frame is all-black — screen recording may be blocked.")
+
+    # Step 1: locate the macOS title bar bottom edge (Sobel only, no header scan).
+    # This is the only UI element we always strip regardless of page type.
+    titlebar_y = _find_titlebar_bottom(bgr)
+
+    # Step 2: decide whether to also strip the Kindle reading-mode header band.
+    # If the row immediately below the title bar is bright (mean ≥ 200), this is
+    # a reading-mode page with a light-gray Kindle header that must be stripped.
+    # If it is dark (cover chrome, image page), return the full frame from
+    # titlebar_y — the dark area is content and must not be trimmed further.
+    below_titlebar_mean = (
+        float(gray_full[titlebar_y : titlebar_y + 10].mean()) if titlebar_y < h_img else 255.0
+    )
+    is_reading_mode = below_titlebar_mean >= 200
+
+    if not is_reading_mode:
+        # Cover / image page: return everything below the title bar.
+        logger.debug(
+            "Cover/image page (below-titlebar mean=%.1f): returning full frame from y=%d.",
+            below_titlebar_mean,
+            titlebar_y,
+        )
         return ContentRegion(x=0, y=titlebar_y, w=w_img, h=h_img - titlebar_y)
 
-    # Strip macOS title bar and Kindle header before content detection
+    # Reading-mode page: also strip the Kindle header band (title text + divider).
     header_y = _find_header_bottom(bgr)
     if header_y > 0:
         body = bgr[header_y:]
@@ -444,12 +459,7 @@ def detect_content_region(
     else:
         body = bgr
 
-    # Pass 1b: reading-mode pages have no dark chrome border.  The full area
-    # below the header IS the page — no contour detection needed.  This
-    # guarantees a consistent full-frame width for every reading-mode page.
     if header_y > 0:
-        # Do not scroll back past the macOS title bar: cap padding at header_y // 2
-        # so we never include the decorative UI area above the Kindle header.
         safe_padding = min(top_padding, header_y // 2)
         content_y = header_y - safe_padding
         logger.debug(
