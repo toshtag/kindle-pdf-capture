@@ -146,34 +146,29 @@ def _is_content_page(bgr: np.ndarray) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Window resize (Accessibility API)
+# Window resize (AppleScript via osascript)
 # ---------------------------------------------------------------------------
 
 
 def _default_ax_resize(pid: int, width: int, height: int) -> None:
-    """Resize the frontmost window of *pid* via the macOS Accessibility API."""
-    try:
-        from ApplicationServices import (  # type: ignore[import]
-            AXUIElementCopyAttributeValue,
-            AXUIElementCreateApplication,
-            AXUIElementSetAttributeValue,
-            kAXSizeAttribute,
-            kAXWindowsAttribute,
-        )
-        from CoreFoundation import CGSizeMake  # type: ignore[import]
+    """Resize the frontmost Kindle window via AppleScript (osascript).
 
-        app = AXUIElementCreateApplication(pid)
-        err, windows = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute, None)
-        if err != 0 or not windows:
-            logger.warning("AX resize: could not list windows for pid=%d (err=%d)", pid, err)
-            return
-        win = windows[0]
-        new_size = CGSizeMake(width, height)
-        err2 = AXUIElementSetAttributeValue(win, kAXSizeAttribute, new_size)
-        if err2 != 0:
-            logger.warning("AX resize: SetAttributeValue failed (err=%d)", err2)
-    except Exception as exc:
-        logger.warning("AX resize failed: %s", exc)
+    Uses ``System Events`` to set the window size by process name.
+    Requires Accessibility permission for the calling process.
+    """
+    import subprocess
+
+    script = (
+        f'tell application "System Events" to tell process "Kindle" '
+        f"to set size of window 1 to {{{width}, {height}}}"
+    )
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        logger.warning("osascript resize failed: %s", result.stderr.strip())
 
 
 def resize_kindle_window(
