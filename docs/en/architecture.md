@@ -24,17 +24,18 @@ find_kindle_window()
   -> capture + content-page validation (brightness + edge density)
 
 for each page:
-  wait_for_render()        # poll frame diff until stable
-  capture_window()         # take screenshot
-  detect_content_region()  # contour analysis -> bounding box
-  normalize_image()        # resize, whiten, sharpen
-  save_jpeg()              # write cropped/page_XXXX.jpg
-  send_right_arrow()       # turn page
-  record_duplicate()       # MD5 of 16x16 downscale for end detection
+  capture_window()           # take screenshot
+  _find_header_bottom()      # detect Kindle header divider line
+  detect_content_region()    # contour analysis on header-stripped image
+  normalize_image()          # resize, whiten, sharpen
+  save_jpeg()                # write cropped/page_XXXX.jpg
+  send_page_turn_key()       # turn page (left or right)
+  wait_for_render()          # poll frame diff until stable
+  record_duplicate()         # MD5 of 16x16 downscale for end detection
 
-build_pdf()                # img2pdf: JPEGs -> PDF
-optimise_pdf()             # pikepdf: compress streams, atomic in-place
-run_ocr()                  # ocrmypdf subprocess (optional)
+build_pdf(dpi=300)           # img2pdf: JPEGs -> PDF (book-like page sizing)
+optimise_pdf()               # pikepdf: compress streams, atomic in-place
+run_ocr()                    # ocrmypdf subprocess (optional)
 ```
 
 ## Testability
