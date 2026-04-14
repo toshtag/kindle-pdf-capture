@@ -389,11 +389,23 @@ def detect_content_region(
     else:
         body = bgr
 
-    # Pass 1: reading-mode pages have no dark chrome border.  The full area
+    gray_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    has_chrome = _has_dark_border(gray_full)
+
+    # Pass 1a: cover/image pages surrounded by Kindle chrome.  Return everything
+    # below the macOS title bar as-is — the dark chrome border IS part of the
+    # page visual and must not be trimmed by contour detection.
+    # Guard: skip if the frame has no bright pixels at all (all-black = screen
+    # recording blocked), so we still raise CropError in that degenerate case.
+    if has_chrome and float(gray_full.max()) > 20:
+        content_y = header_y if header_y > 0 else 0
+        logger.debug("Cover/chrome page: returning full area below title bar (y=%d).", content_y)
+        return ContentRegion(x=0, y=content_y, w=w_img, h=h_img - content_y)
+
+    # Pass 1b: reading-mode pages have no dark chrome border.  The full area
     # below the header IS the page — no contour detection needed.  This
     # guarantees a consistent full-frame width for every reading-mode page.
-    gray_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    if header_y > 0 and not _has_dark_border(gray_full):
+    if header_y > 0:
         # Do not scroll back past the macOS title bar: cap padding at header_y // 2
         # so we never include the decorative UI area above the Kindle header.
         safe_padding = min(top_padding, header_y // 2)
