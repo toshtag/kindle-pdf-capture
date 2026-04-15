@@ -49,9 +49,9 @@ def build_pdf(jpeg_paths: list[Path], output: Path, *, dpi: float = 300.0) -> No
     layout_fun = img2pdf.get_fixed_dpi_layout_fun((dpi, dpi))
 
     logger.info("Building PDF from %d pages -> %s (dpi=%.0f)", len(jpeg_paths), output, dpi)
-    pdf_bytes = img2pdf.convert([str(p) for p in jpeg_paths], layout_fun=layout_fun)
-    output.write_bytes(pdf_bytes)
-    logger.debug("PDF written: %s (%d bytes)", output, len(pdf_bytes))
+    with open(output, "wb") as f:
+        img2pdf.convert([str(p) for p in jpeg_paths], layout_fun=layout_fun, outputstream=f)
+    logger.debug("PDF written: %s (%d bytes)", output, output.stat().st_size)
 
 
 def optimise_pdf(src: Path, dst: Path) -> None:

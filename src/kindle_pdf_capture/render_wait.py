@@ -34,6 +34,7 @@ class WaitResult:
     status: WaitStatus
     elapsed: float  # seconds
     iterations: int
+    last_frame: np.ndarray | None = None  # last frame captured during the wait
 
     @property
     def converged(self) -> bool:
@@ -111,6 +112,7 @@ def wait_for_render(
     """
     t0 = time.monotonic()
     prev = capture_fn()
+    curr = prev
     consecutive_stable = 0
     iterations = 0
 
@@ -118,7 +120,9 @@ def wait_for_render(
         elapsed = time.monotonic() - t0
         if elapsed >= timeout:
             logger.warning("wait_for_render timed out after %.1fs", timeout)
-            return WaitResult(status=WaitStatus.TIMEOUT, elapsed=elapsed, iterations=iterations)
+            return WaitResult(
+                status=WaitStatus.TIMEOUT, elapsed=elapsed, iterations=iterations, last_frame=curr
+            )
 
         if poll_interval > 0:
             time.sleep(poll_interval)
@@ -133,7 +137,10 @@ def wait_for_render(
                 elapsed = time.monotonic() - t0
                 logger.debug("Render converged in %.2fs (%d iters)", elapsed, iterations)
                 return WaitResult(
-                    status=WaitStatus.CONVERGED, elapsed=elapsed, iterations=iterations
+                    status=WaitStatus.CONVERGED,
+                    elapsed=elapsed,
+                    iterations=iterations,
+                    last_frame=curr,
                 )
         else:
             consecutive_stable = 0
