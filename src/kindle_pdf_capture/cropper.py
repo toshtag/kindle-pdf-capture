@@ -91,6 +91,7 @@ def _find_titlebar_bottom(
     *,
     search_fraction: float = 0.25,
     search_h: int | None = None,
+    gray_strip: np.ndarray | None = None,
 ) -> int:
     """Return the y-coordinate of the macOS title bar bottom edge.
 
@@ -104,6 +105,14 @@ def _find_titlebar_bottom(
     is always enough to capture the macOS title bar (~y=55) while keeping
     the Kindle header (~y=110+) outside the window.
 
+    Args:
+        bgr: Full BGR frame.
+        search_fraction: Fraction of frame height to scan (used when search_h
+            is None).
+        search_h: Fixed number of rows to scan from the top.
+        gray_strip: Pre-computed grayscale of the top *search_h* rows.  When
+            provided the internal cvtColor call is skipped.
+
     Returns 0 if no full-width edge is found.
     """
     h_img, w_img = bgr.shape[:2]
@@ -112,7 +121,10 @@ def _find_titlebar_bottom(
     else:
         search_h = max(1, min(search_h, h_img))
 
-    gray = cv2.cvtColor(bgr[:search_h], cv2.COLOR_BGR2GRAY)
+    if gray_strip is not None:
+        gray = gray_strip
+    else:
+        gray = cv2.cvtColor(bgr[:search_h], cv2.COLOR_BGR2GRAY)
     sobel = cv2.Sobel(gray.astype(np.float64), cv2.CV_64F, 0, 1, ksize=3)
     abs_sobel = np.abs(sobel)
 
@@ -130,7 +142,7 @@ def _find_titlebar_bottom(
     return int(indices[-1]) + 1
 
 
-def _find_header_bottom(bgr: np.ndarray) -> int:
+def _find_header_bottom(bgr: np.ndarray, *, gray: np.ndarray | None = None) -> int:
     """Return the y-coordinate immediately after the Kindle book-title text block.
 
     The Kindle reading-mode header consists of (top to bottom):
@@ -142,28 +154,41 @@ def _find_header_bottom(bgr: np.ndarray) -> int:
     Scans up to 100 rows below the title bar for the text block, then
     returns the first quiet row after it.
 
+    Args:
+        bgr: Full BGR frame.
+        gray: Pre-computed grayscale of *bgr*.  Passed by callers that already
+            hold a grayscale copy to avoid a redundant cvtColor call.  When
+            None the conversion is performed internally.
+
     Returns 0 if:
       - no title bar edge is found in the top 60 rows, or
       - no text block follows within 100 rows (non-reading-mode frame).
     """
     h_img = bgr.shape[0]
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    if gray is None:
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
-    titlebar_y = _find_titlebar_bottom(bgr, search_h=60)
+    search_h = min(60, h_img)
+    gray_strip = gray[:search_h]
+    titlebar_y = _find_titlebar_bottom(bgr, search_h=search_h, gray_strip=gray_strip)
     if titlebar_y == 0:
         logger.debug("_find_header_bottom: no title bar edge found")
         return 0
 
     search_end = min(titlebar_y + 100, h_img)
-    title_block_started = False
 
-    for y in range(titlebar_y, search_end):
-        row_std = float(gray[y].std())
+    # Vectorised std-dev computation across the scan rows (avoids per-row Python loop).
+    rows = gray[titlebar_y:search_end].astype(np.float32)
+    row_stds = rows.std(axis=1)
+
+    title_block_started = False
+    for i, row_std in enumerate(row_stds):
         if not title_block_started:
             if row_std >= _HEADER_TEXT_STD_MIN:
                 title_block_started = True
         else:
             if row_std < _HEADER_QUIET_STD_MAX:
+                y = titlebar_y + i
                 logger.debug("Header bottom at y=%d (titlebar_y=%d)", y, titlebar_y)
                 return y
 
@@ -371,7 +396,12 @@ def detect_content_region(
         logger.debug("All-black frame; skipping all passes.")
         raise CropError("Frame is all-black — screen recording may be blocked.")
 
-    titlebar_y = _find_titlebar_bottom(bgr, search_h=60)
+    # Compute the search-strip grayscale once and pass it to both callers that
+    # need the top-60-row Sobel scan, avoiding repeated cvtColor on the same data.
+    search_h = min(60, h_img)
+    gray_strip = gray_full[:search_h]
+
+    titlebar_y = _find_titlebar_bottom(bgr, search_h=search_h, gray_strip=gray_strip)
 
     below_titlebar_mean = (
         float(gray_full[titlebar_y : titlebar_y + 10].mean()) if titlebar_y < h_img else 255.0
@@ -386,7 +416,7 @@ def detect_content_region(
         )
         return ContentRegion(x=0, y=titlebar_y, w=w_img, h=h_img - titlebar_y)
 
-    header_y = _find_header_bottom(bgr)
+    header_y = _find_header_bottom(bgr, gray=gray_full)
     if header_y > 0:
         content_y = header_y + _HEADER_RULE_MARGIN
         logger.debug(
