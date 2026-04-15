@@ -74,12 +74,11 @@ console = Console(stderr=True)
 
 
 def _setup_logging(debug: bool) -> None:
-    level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(message)s",
-        handlers=[RichHandler(console=console, show_time=False, show_path=False)],
-    )
+    level = logging.DEBUG if debug else logging.WARNING
+    root = logging.getLogger()
+    root.setLevel(level)
+    if not root.handlers:
+        root.addHandler(RichHandler(console=console, show_time=False, show_path=False))
 
 
 # ---------------------------------------------------------------------------
@@ -333,32 +332,36 @@ def _run_capture(
     locked_crop_y: int | None = None
 
     try:
-        while not session.is_finished():
-            if pages_to_retry and page_num not in pages_to_retry:
+        with console.status("", refresh_per_second=4) as status:
+            while not session.is_finished():
+                if pages_to_retry and page_num not in pages_to_retry:
+                    page_num += 1
+                    continue
+
+                if session.should_skip(page_num):
+                    log.debug("Page %d already captured — skipping.", page_num)
+                    session.record_result(
+                        PageResult(page_num=page_num, status=PageStatus.SKIPPED, cropped_path=None)
+                    )
+                    page_num += 1
+                    continue
+
+                total = config.max_pages
+                status.update(f"[bold]Capturing[/bold] page {page_num}/{total} …")
+
+                locked_crop_y = _capture_one_page(page_num, window, config, session, locked_crop_y)
+
+                send_page_turn_key(window.pid, key_code)
+                wait_result = wait_for_render(capture_fn=lambda: capture_window(window))
+                if wait_result.status == WaitStatus.TIMEOUT:
+                    log.warning(
+                        "Page %d: render timed out after %.1fs", page_num, wait_result.elapsed
+                    )
+
+                next_frame = capture_window(window)
+                session.record_duplicate(next_frame)
+
                 page_num += 1
-                continue
-
-            if session.should_skip(page_num):
-                log.info("Page %d already captured — skipping.", page_num)
-                session.record_result(
-                    PageResult(page_num=page_num, status=PageStatus.SKIPPED, cropped_path=None)
-                )
-                page_num += 1
-                continue
-
-            log.info("Capturing page %d …", page_num)
-
-            locked_crop_y = _capture_one_page(page_num, window, config, session, locked_crop_y)
-
-            send_page_turn_key(window.pid, key_code)
-            wait_result = wait_for_render(capture_fn=lambda: capture_window(window))
-            if wait_result.status == WaitStatus.TIMEOUT:
-                log.warning("Page %d: render timed out after %.1fs", page_num, wait_result.elapsed)
-
-            next_frame = capture_window(window)
-            session.record_duplicate(next_frame)
-
-            page_num += 1
 
     finally:
         # Restore the original window size even if the loop exits via error.
@@ -367,7 +370,7 @@ def _run_capture(
         if orig_window_size is not None:
             orig_w, orig_h = orig_window_size
             resize_kindle_window(window, target_width=orig_w, target_height=orig_h, force=True)
-            log.info("Kindle window restored to original size (%dx%d).", orig_w, orig_h)
+            log.debug("Kindle window restored to original size (%dx%d).", orig_w, orig_h)
 
     save_session(config, session.results)
 
@@ -377,17 +380,17 @@ def _run_capture(
         return
 
     pdf_path = config.out_dir / "pdf" / "book.pdf"
-    log.info("Building PDF from %d pages …", len(jpeg_paths))
-    build_pdf(jpeg_paths, pdf_path, dpi=config.pdf_dpi)
-    optimise_pdf(pdf_path, pdf_path)
-    log.info("PDF saved to %s", pdf_path)
+    with console.status(f"[bold]Building PDF[/bold] from {len(jpeg_paths)} pages …"):
+        build_pdf(jpeg_paths, pdf_path, dpi=config.pdf_dpi)
+        optimise_pdf(pdf_path, pdf_path)
+    console.print(f"[green]✓[/green] PDF saved → {pdf_path}")
 
     if config.ocr:
         ocr_path = config.out_dir / "pdf" / "book_ocr.pdf"
-        log.info("Running OCR (%s) …", config.ocr_lang)
-        result = run_ocr(pdf_path, ocr_path, lang=config.ocr_lang, optimize=config.ocr_optimize)
+        with console.status(f"[bold]Running OCR[/bold] ({config.ocr_lang}) …"):
+            result = run_ocr(pdf_path, ocr_path, lang=config.ocr_lang, optimize=config.ocr_optimize)
         if result.succeeded:
-            log.info("OCR PDF saved to %s", ocr_path)
+            console.print(f"[green]✓[/green] OCR PDF saved → {ocr_path}")
         else:
             log.warning("OCR failed (rc=%s); non-OCR PDF is still available.", result.returncode)
 
