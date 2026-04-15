@@ -596,7 +596,7 @@ class TestHeaderRuleMargin:
 
     def test_crop_starts_below_rule_line(self) -> None:
         """content_y must be at or below the bottom edge of the divider rule."""
-        img, content_start, rule_bottom = _make_kindle_window_with_header_and_rule()
+        img, _content_start, rule_bottom = _make_kindle_window_with_header_and_rule()
 
         region = detect_content_region(img)
 
@@ -623,7 +623,7 @@ class TestHeaderRuleMargin:
         we never accidentally include the rule in the output.
         """
         img_ruled, _, rule_bottom = _make_kindle_window_with_header_and_rule()
-        img_plain, content_start_plain = _make_kindle_window_with_header()
+        img_plain, _content_start_plain = _make_kindle_window_with_header()
 
         region_ruled = detect_content_region(img_ruled)
         region_plain = detect_content_region(img_plain)
