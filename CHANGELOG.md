@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-15
+
+### Added
+
+- `ocr.validate_ocr_lang()` validates Tesseract language codes before passing
+  them to `ocrmypdf`. Invalid values (uppercase, path characters, shell
+  metacharacters, wrong length) are rejected at CLI startup with a clear error
+  message.
+- `WaitResult.last_frame` stores the final captured frame from `wait_for_render`,
+  allowing the capture loop to reuse it without an extra screenshot.
+
+### Changed
+
+- `--ocr-lang` is now validated at startup when `--ocr` is set; the CLI exits
+  with a `BadParameter` error instead of letting `ocrmypdf` receive an
+  unexpected string.
+- Capture loop reuses `WaitResult.last_frame` instead of calling
+  `capture_window` a second time after each page turn.
+
+### Performance
+
+- `pdf_builder.build_pdf`: PDF bytes are streamed directly to disk via
+  `img2pdf`'s `outputstream` argument. Peak heap usage for a 1000-page book
+  drops from ~500 MB to near zero.
+- `cropper.detect_content_region`: BGR→GRAY conversion reduced from 4 calls
+  per frame to 1 by computing the grayscale image once and threading it
+  through `_find_header_bottom` and `_find_titlebar_bottom`.
+- `cropper._find_header_bottom`: row std-dev scan vectorised with
+  `rows.std(axis=1)` replacing a Python-level loop over up to 100 rows.
+
 ## [1.1.0] - 2026-04-15
 
 ### Changed
@@ -205,7 +235,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bilingual documentation (English and Japanese)
 - GitHub PR/issue templates, Dependabot, and security policy
 
-[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.1...v1.0.2
