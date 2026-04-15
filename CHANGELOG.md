@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-04-15
+
+### Fixed
+
+- `ValueError: The truth value of an array with more than one element is ambiguous`
+  crash on every page turn. `WaitResult.last_frame` is a numpy array, and using
+  Python's `or` operator on it called `__bool__`, which numpy rejects. Fixed by
+  replacing `last_frame or capture_window(window)` with an explicit
+  `is not None` check.
+
 ## [1.2.0] - 2026-04-15
 
 ### Added
@@ -235,7 +245,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bilingual documentation (English and Japanese)
 - GitHub PR/issue templates, Dependabot, and security policy
 
-[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.2...v1.0.3
