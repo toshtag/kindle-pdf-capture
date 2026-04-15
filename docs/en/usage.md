@@ -22,7 +22,7 @@ You have `--start-delay` seconds (default 3) to switch focus to Kindle before ca
 | `--start-delay N` | 3 | Seconds before capture starts |
 | `--direction DIR` | `right` | Page-advance direction: `right` for LTR, `left` for RTL (manga) |
 | `--pdf-dpi N` | 300 | DPI for PDF page sizing (300 maps 1800 px to 6 inches) |
-| `--ocr` | off | Run OCR on the assembled PDF |
+| `--ocr` | off | Run OCR on the assembled PDF (requires the `[ocr]` extra — see [installation](installation.md#install-with-ocr-support)) |
 | `--ocr-lang LANG` | `jpn+eng` | Tesseract language string |
 | `--ocr-optimize N` | 1 | OCR optimization level 0-3 |
 | `--retry-failed` | off | Re-capture pages from `logs/failed_pages.json` |

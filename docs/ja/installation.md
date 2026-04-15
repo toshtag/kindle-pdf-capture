@@ -21,22 +21,34 @@ pip install kindle-pdf-capture
 
 ## OCR 付きでインストール
 
-OCR には Tesseract と Ghostscript が必要です。
+OCR には [Tesseract](https://github.com/tesseract-ocr/tesseract) と [Ghostscript](https://www.ghostscript.com/) のシステム依存ライブラリに加え、`[ocr]` extra（`ocrmypdf` を含む）が必要です。
 
 ```bash
-# システム依存ライブラリのインストール（macOS）
+# 1. システム依存ライブラリのインストール（macOS）
 brew install tesseract tesseract-lang ghostscript
 
-# OCR オプション付きでパッケージをインストール
+# 2. OCR extra 付きでパッケージをインストール
+uv tool install "kindle-pdf-capture[ocr]"
+# または pip の場合:
 pip install "kindle-pdf-capture[ocr]"
 ```
+
+> **注意:** `[ocr]` extra を付けると `ocrmypdf` が自動でインストールされます。
+> 付けずにインストールした場合、`kpc --ocr` 実行時に "No such file or directory: 'ocrmypdf'" エラーが発生します。
 
 ## ソースからインストール
 
 ```bash
 git clone https://github.com/toshtag/kindle-pdf-capture.git
 cd kindle-pdf-capture
+
+# OCR なし
 uv sync
+
+# OCR あり（ocrmypdf も同時にインストールされます）
+brew install tesseract tesseract-lang ghostscript
+uv sync --all-extras
+
 uv run kpc --help
 ```
 
