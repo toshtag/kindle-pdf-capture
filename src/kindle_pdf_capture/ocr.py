@@ -1,4 +1,4 @@
-"""OCR wrapper: runs ocrmypdf as a subprocess on the generated PDF.
+"""OCR wrapper: runs ocrmypdf as an in-process call on the generated PDF.
 
 OCR is an optional post-processing step (Phase 3).  Failures are logged
 and returned as OcrResult; they never raise exceptions so the caller's
@@ -10,9 +10,13 @@ from __future__ import annotations
 import enum
 import logging
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import ocrmypdf as _ocrmypdf
+except ImportError:  # optional dependency — only needed when --ocr is used
+    _ocrmypdf = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,9 @@ def run_ocr(
 ) -> OcrResult:
     """Run ocrmypdf on *src* and write the result to *dst*.
 
+    Uses the ocrmypdf Python API directly so that the built-in progress bar
+    (one line per page) is shown in the terminal during processing.
+
     The function never raises: all errors are captured and returned as
     OcrResult with status=FAILED so the caller's PDF (src) is always safe.
 
@@ -72,33 +79,33 @@ def run_ocr(
     """
     src = Path(src)
     dst = Path(dst)
+    languages = lang.split("+")
 
-    cmd = [
-        "ocrmypdf",
-        "--skip-text",
-        "--optimize",
-        str(optimize),
-        "-l",
-        lang,
-        str(src),
-        str(dst),
-    ]
+    logger.info("Running OCR: src=%s lang=%s optimize=%d", src, lang, optimize)
 
-    logger.info("Running OCR: %s", " ".join(cmd))
-
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
+    if _ocrmypdf is None:
+        logger.error(
+            "ocrmypdf is not installed. Install with: pip install 'kindle-pdf-capture[ocr]'"
         )
-    except Exception as exc:
-        logger.error("ocrmypdf could not be started: %s", exc)
         return OcrResult(status=OcrStatus.FAILED, output=dst, returncode=-1)
 
-    if proc.returncode != 0:
-        logger.error("ocrmypdf exited with code %d: %s", proc.returncode, proc.stderr.strip())
-        return OcrResult(status=OcrStatus.FAILED, output=dst, returncode=proc.returncode)
+    try:
+        exit_code = _ocrmypdf.ocr(
+            src,
+            dst,
+            language=languages,
+            skip_text=True,
+            optimize=optimize,
+            progress_bar=True,
+        )
+    except Exception as exc:
+        logger.error("ocrmypdf raised an exception: %s", exc)
+        return OcrResult(status=OcrStatus.FAILED, output=dst, returncode=-1)
 
-    logger.info("OCR completed: %s", dst)
-    return OcrResult(status=OcrStatus.SUCCESS, output=dst, returncode=0)
+    returncode = int(exit_code)
+    if exit_code == _ocrmypdf.ExitCode.ok:
+        logger.info("OCR completed: %s", dst)
+        return OcrResult(status=OcrStatus.SUCCESS, output=dst, returncode=returncode)
+
+    logger.error("ocrmypdf exited with code %d: %s", returncode, exit_code.name)
+    return OcrResult(status=OcrStatus.FAILED, output=dst, returncode=returncode)

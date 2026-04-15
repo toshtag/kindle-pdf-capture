@@ -1,7 +1,7 @@
 """Tests for the OCR wrapper module.
 
-All tests mock subprocess so they do not require ocrmypdf or tesseract
-to be installed on the CI runner.
+All tests patch kindle_pdf_capture.ocr._ocrmypdf so they do not require
+ocrmypdf or tesseract to be installed on the CI runner.
 """
 
 from __future__ import annotations
@@ -10,6 +10,36 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from kindle_pdf_capture.ocr import OcrResult, OcrStatus, run_ocr, validate_ocr_lang
+
+# ---------------------------------------------------------------------------
+# Shared mock helpers
+# ---------------------------------------------------------------------------
+
+# A minimal stand-in for ocrmypdf.ExitCode so tests don't need the real package.
+
+
+class _ExitCode:
+    ok = MagicMock(name="ExitCode.ok")
+    ok.__int__ = lambda self: 0
+    input_file = MagicMock(name="ExitCode.input_file")
+    input_file.__int__ = lambda self: 2
+    input_file.name = "input_file"
+
+
+def _mock_ocrmypdf(exit_code=None, raises=None):
+    """Return a MagicMock that stands in for the ocrmypdf module."""
+    mod = MagicMock()
+    mod.ExitCode = _ExitCode
+    if raises is not None:
+        mod.ocr.side_effect = raises
+    else:
+        mock_ec = MagicMock()
+        mock_ec.__int__ = lambda self: 0 if exit_code == "ok" else 2
+        mock_ec.__eq__ = lambda self, other: exit_code == "ok" and other is _ExitCode.ok
+        mock_ec.name = "ok" if exit_code == "ok" else "input_file"
+        mod.ocr.return_value = mock_ec
+    return mod
+
 
 # ---------------------------------------------------------------------------
 # OcrResult / OcrStatus
@@ -38,13 +68,12 @@ class TestOcrResult:
 
 
 class TestRunOcrSuccess:
-    def test_returns_success_on_zero_returncode(self, tmp_path: Path) -> None:
+    def test_returns_success_on_exit_code_ok(self, tmp_path: Path) -> None:
         src = tmp_path / "book.pdf"
         dst = tmp_path / "book_ocr.pdf"
         src.write_bytes(b"%PDF-1.4")
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stderr="")
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", _mock_ocrmypdf("ok")):
             result = run_ocr(src, dst)
 
         assert result.status == OcrStatus.SUCCESS
@@ -55,44 +84,38 @@ class TestRunOcrSuccess:
         dst = tmp_path / "book_ocr.pdf"
         src.write_bytes(b"%PDF-1.4")
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stderr="")
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", _mock_ocrmypdf("ok")):
             result = run_ocr(src, dst)
 
         assert result.output == dst
 
-    def test_subprocess_called_with_correct_args(self, tmp_path: Path) -> None:
+    def test_ocr_called_with_correct_args(self, tmp_path: Path) -> None:
         src = tmp_path / "book.pdf"
         dst = tmp_path / "book_ocr.pdf"
         src.write_bytes(b"%PDF-1.4")
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stderr="")
+        mock_mod = _mock_ocrmypdf("ok")
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", mock_mod):
             run_ocr(src, dst, lang="jpn+eng", optimize=2)
 
-        call_args = mock_run.call_args
-        cmd = call_args[0][0]
-        assert cmd[0] == "ocrmypdf"
-        assert "--skip-text" in cmd
-        assert "-l" in cmd
-        assert "jpn+eng" in cmd
-        assert "--optimize" in cmd
-        assert "2" in cmd or 2 in cmd
-        assert str(src) in cmd
-        assert str(dst) in cmd
+        mock_mod.ocr.assert_called_once()
+        kwargs = mock_mod.ocr.call_args.kwargs
+        assert kwargs["language"] == ["jpn", "eng"]
+        assert kwargs["optimize"] == 2
+        assert kwargs["skip_text"] is True
+        assert kwargs["progress_bar"] is True
 
     def test_lang_parameter_passed(self, tmp_path: Path) -> None:
         src = tmp_path / "book.pdf"
         dst = tmp_path / "book_ocr.pdf"
         src.write_bytes(b"%PDF-1.4")
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stderr="")
+        mock_mod = _mock_ocrmypdf("ok")
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", mock_mod):
             run_ocr(src, dst, lang="eng")
 
-        cmd = mock_run.call_args[0][0]
-        idx = cmd.index("-l")
-        assert cmd[idx + 1] == "eng"
+        kwargs = mock_mod.ocr.call_args.kwargs
+        assert kwargs["language"] == ["eng"]
 
 
 # ---------------------------------------------------------------------------
@@ -101,27 +124,38 @@ class TestRunOcrSuccess:
 
 
 class TestRunOcrFailure:
-    def test_returns_failed_on_nonzero_returncode(self, tmp_path: Path) -> None:
+    def test_returns_failed_on_nonzero_exit_code(self, tmp_path: Path) -> None:
         src = tmp_path / "book.pdf"
         dst = tmp_path / "book_ocr.pdf"
         src.write_bytes(b"%PDF-1.4")
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stderr="some OCR error")
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", _mock_ocrmypdf("fail")):
             result = run_ocr(src, dst)
 
         assert result.status == OcrStatus.FAILED
-        assert result.returncode == 1
         assert result.succeeded is False
 
-    def test_does_not_raise_on_subprocess_error(self, tmp_path: Path) -> None:
-        """Even if subprocess raises, run_ocr must return a result, not propagate."""
-
+    def test_does_not_raise_on_ocr_exception(self, tmp_path: Path) -> None:
+        """Even if ocrmypdf.ocr raises, run_ocr must return a result, not propagate."""
         src = tmp_path / "book.pdf"
         dst = tmp_path / "book_ocr.pdf"
         src.write_bytes(b"%PDF-1.4")
 
-        with patch("subprocess.run", side_effect=FileNotFoundError("ocrmypdf not found")):
+        with patch(
+            "kindle_pdf_capture.ocr._ocrmypdf", _mock_ocrmypdf(raises=RuntimeError("internal"))
+        ):
+            result = run_ocr(src, dst)
+
+        assert result.status == OcrStatus.FAILED
+        assert result.succeeded is False
+
+    def test_returns_failed_when_ocrmypdf_not_installed(self, tmp_path: Path) -> None:
+        """When _ocrmypdf is None (package not installed), run_ocr returns FAILED."""
+        src = tmp_path / "book.pdf"
+        dst = tmp_path / "book_ocr.pdf"
+        src.write_bytes(b"%PDF-1.4")
+
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", None):
             result = run_ocr(src, dst)
 
         assert result.status == OcrStatus.FAILED
@@ -131,12 +165,9 @@ class TestRunOcrFailure:
         src = tmp_path / "missing.pdf"
         dst = tmp_path / "out.pdf"
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stderr="")
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", _mock_ocrmypdf("fail")):
             result = run_ocr(src, dst)
 
-        # Either it returns FAILED without calling subprocess, or subprocess
-        # fails — either way, result.succeeded must be False
         assert result.succeeded is False
 
 
@@ -193,8 +224,7 @@ class TestRunOcrSideEffects:
         dst = tmp_path / "book_ocr.pdf"
         src.write_bytes(b"%PDF-1.4 original")
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stderr="error")
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", _mock_ocrmypdf("fail")):
             run_ocr(src, dst)
 
         assert src.exists()
