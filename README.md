@@ -17,8 +17,12 @@ Capture Kindle for Mac pages via screen recording and build a high-quality PDF (
 ## Quick start
 
 ```bash
-# Install
+# Install (without OCR)
 uv sync
+
+# Install with OCR support
+brew install tesseract tesseract-lang ghostscript
+uv sync --all-extras
 
 # Capture a book (open Kindle to the first page first)
 uv run kpc --out output/my-book
@@ -26,7 +30,7 @@ uv run kpc --out output/my-book
 # Capture a right-to-left book (manga)
 uv run kpc --out output/my-manga --direction left
 
-# Capture with OCR
+# Capture with OCR (requires --all-extras install above)
 uv run kpc --out output/my-book --ocr
 
 # See all options
