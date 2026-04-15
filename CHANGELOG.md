@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-04-15
+
+### Added
+
+- OCR progress bar: switched from `subprocess` to the `ocrmypdf` Python API
+  with `progress_bar=True`, showing per-page progress directly in the terminal
+  instead of a silent spinner.
+
+### Fixed
+
+- Capture page counter no longer shows a bogus `/1000` denominator. The status
+  line now displays `page N` by default; `page N/M` is shown only when
+  `--max-pages` is explicitly passed.
+- Removed a spurious WARNING emitted on every run when the initial Kindle
+  screenshot (typically the cover page) did not pass the reading-page heuristic.
+
 ## [1.2.1] - 2026-04-15
 
 ### Fixed
@@ -245,7 +261,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bilingual documentation (English and Japanese)
 - GitHub PR/issue templates, Dependabot, and security policy
 
-[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.3...v1.1.0
