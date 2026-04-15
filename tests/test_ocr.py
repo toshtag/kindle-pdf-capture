@@ -185,6 +185,8 @@ class TestValidateOcrLang:
     def test_invalid_ends_with_plus(self) -> None:
         assert validate_ocr_lang("eng+") is False
 
+
+class TestRunOcrSideEffects:
     def test_original_pdf_unaffected_on_ocr_failure(self, tmp_path: Path) -> None:
         """book.pdf must exist and be unchanged if OCR fails."""
         src = tmp_path / "book.pdf"
