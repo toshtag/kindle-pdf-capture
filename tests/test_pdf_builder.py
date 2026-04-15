@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -102,6 +103,35 @@ class TestBuildPdf:
             assert abs(w_pt - 432.0) < 1.0
             # 2400 px at 300 DPI = 2400 * 72 / 300 = 576 pt = 8 inches
             assert abs(h_pt - 576.0) < 1.0
+
+    def test_build_pdf_uses_outputstream_not_return_value(self, tmp_path: Path) -> None:
+        """build_pdf must stream to disk via outputstream, not hold all bytes in memory.
+
+        img2pdf.convert accepts an ``outputstream`` keyword argument that writes
+        directly to a file object.  When outputstream is supplied, convert()
+        returns None instead of bytes.  This test verifies that build_pdf passes
+        outputstream so that large books do not exhaust heap memory.
+        """
+        import img2pdf as _img2pdf
+
+        original_convert = _img2pdf.convert
+        captured_kwargs: list[dict] = []
+
+        def spy_convert(*args, **kwargs):
+            captured_kwargs.append(kwargs)
+            return original_convert(*args, **kwargs)
+
+        jpegs = [_make_jpeg(tmp_path, "p.jpg")]
+        out = tmp_path / "book.pdf"
+
+        with patch("img2pdf.convert", side_effect=spy_convert):
+            build_pdf(jpegs, out)
+
+        assert captured_kwargs, "img2pdf.convert was not called"
+        assert "outputstream" in captured_kwargs[0], (
+            "build_pdf must pass outputstream= to img2pdf.convert to avoid loading "
+            "all PDF bytes into memory at once"
+        )
 
     def test_default_dpi_produces_reasonable_page_size(self, tmp_path: Path) -> None:
         """Default DPI should produce pages with width around 6 inches (432 pt)."""
