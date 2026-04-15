@@ -22,7 +22,7 @@ kpc --out output/my-book
 | `--start-delay N` | 3 | キャプチャ開始までの待機時間（秒） |
 | `--direction DIR` | `right` | ページ送り方向: LTR は `right`、RTL（マンガ等）は `left` |
 | `--pdf-dpi N` | 300 | PDF ページサイズの DPI（300 で 1800 px = 6 インチ幅） |
-| `--ocr` | オフ | 生成した PDF に OCR を実行 |
+| `--ocr` | オフ | 生成した PDF に OCR を実行（`[ocr]` extra が必要 — [インストール](installation.md#ocr-付きでインストール)参照） |
 | `--ocr-lang LANG` | `jpn+eng` | Tesseract の言語指定 |
 | `--ocr-optimize N` | 1 | OCR 最適化レベル（0-3） |
 | `--retry-failed` | オフ | `logs/failed_pages.json` のページのみ再キャプチャ |
