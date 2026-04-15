@@ -358,7 +358,7 @@ def _run_capture(
                         "Page %d: render timed out after %.1fs", page_num, wait_result.elapsed
                     )
 
-                next_frame = capture_window(window)
+                next_frame = wait_result.last_frame or capture_window(window)
                 session.record_duplicate(next_frame)
 
                 page_num += 1
