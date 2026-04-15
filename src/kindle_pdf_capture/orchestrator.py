@@ -32,7 +32,7 @@ class CaptureConfig:
     """All settings for a capture run."""
 
     out_dir: Path
-    max_pages: int = 1000
+    max_pages: int | None = None
     resize_width: int = 1800
     jpeg_quality: int = 80
     save_raw: bool = False
@@ -126,7 +126,7 @@ class CaptureSession:
 
     def is_finished(self) -> bool:
         """Return True when the capture loop should stop."""
-        if len(self._results) >= self._cfg.max_pages:
+        if self._cfg.max_pages is not None and len(self._results) >= self._cfg.max_pages:
             logger.info("Reached max_pages=%d", self._cfg.max_pages)
             return True
         if self._duplicate_streak >= _DUPLICATE_STREAK_LIMIT:
