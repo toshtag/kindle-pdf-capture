@@ -907,3 +907,195 @@ class TestApplyCropLock:
             region, locked = _apply_crop_lock(region, frame, titlebar_y, locked)
             assert region.y == 130, f"Page {i + 1}: y must be 130, got {region.y}"
         assert locked == 130
+
+
+# ---------------------------------------------------------------------------
+# Cover page (page 1) regression tests
+#
+# Root cause of the recurring page-1 regression:
+#   detect_content_region classifies a frame by sampling the 10 rows
+#   immediately below the macOS title bar:
+#     - mean >= 200 → reading-mode  (Kindle header background ~230-250)
+#     - mean <  200 → cover / image (dark Kindle chrome or dark illustration)
+#
+#   _apply_crop_lock only locks reading-mode pages (region.y > titlebar_y).
+#   Cover pages (region.y == titlebar_y) must NOT set the lock, otherwise
+#   the cover's y bleeds into every subsequent page's crop.
+#
+#   These tests verify the full pipeline interaction:
+#     page 1 = dark cover frame  → no lock set
+#     page 2 = reading-mode frame → lock set from page 2's y
+# ---------------------------------------------------------------------------
+
+
+def _make_cover_frame(width: int = 1200, height: int = 900, titlebar_h: int = 55) -> np.ndarray:
+    """Synthetic Kindle cover frame: dark chrome surrounds the book page.
+
+    Below the macOS title bar the mean pixel value is ~16 (dark chrome),
+    so detect_content_region classifies this as a cover/image page.
+    """
+    frame = np.full((height, width, 3), 16, dtype=np.uint8)
+    # macOS title bar: light gray stripe
+    frame[:titlebar_h, :] = 210
+    return frame
+
+
+def _make_reading_frame(
+    width: int = 1200, height: int = 900, titlebar_h: int = 55, header_end: int = 130
+) -> np.ndarray:
+    """Synthetic Kindle reading-mode frame.
+
+    Below the macOS title bar the mean pixel value is ~230 (light-gray
+    Kindle header), so detect_content_region classifies this as reading mode.
+    header_end is where the Kindle header ends and body content begins.
+    """
+    frame = np.full((height, width, 3), 255, dtype=np.uint8)
+    # macOS title bar
+    frame[:titlebar_h, :] = 210
+    # Kindle header band (light gray, uniform → below_titlebar_mean >= 200)
+    frame[titlebar_h:header_end, :] = 230
+    # Simulate text in body (alternating dark rows so std is high enough)
+    for y in range(header_end + 10, height - 20, 18):
+        frame[y : y + 8, 80 : width - 80] = 30
+    return frame
+
+
+class TestCoverPageRegression:
+    """Regression suite for 1-page-1 (cover) capture bugs.
+
+    These tests exercise the real detect_content_region + _apply_crop_lock
+    pipeline (not mocked) so that any future change to cropper.py or
+    _apply_crop_lock immediately surfaces as a test failure.
+    """
+
+    def test_cover_frame_classified_as_cover_not_reading_mode(self):
+        """detect_content_region must classify a dark-chrome frame as cover.
+
+        Expected: region.y == titlebar_y (only macOS title bar stripped),
+        region.w == frame width (full width returned).
+        """
+        from kindle_pdf_capture.cropper import _find_titlebar_bottom, detect_content_region
+
+        frame = _make_cover_frame(width=1200, height=900, titlebar_h=55)
+        region = detect_content_region(frame)
+        titlebar_y = _find_titlebar_bottom(frame, search_h=60)
+
+        assert region.y == titlebar_y, (
+            f"Cover frame must return region starting at titlebar_y={titlebar_y}, "
+            f"got region.y={region.y}"
+        )
+        assert region.w == 1200, f"Cover frame must return full width, got {region.w}"
+
+    def test_reading_frame_classified_as_reading_mode(self):
+        """detect_content_region must classify a light-header frame as reading mode.
+
+        Expected: region.y > titlebar_y (Kindle header also stripped).
+        """
+        from kindle_pdf_capture.cropper import _find_titlebar_bottom, detect_content_region
+
+        frame = _make_reading_frame(width=1200, height=900, titlebar_h=55, header_end=130)
+        region = detect_content_region(frame)
+        titlebar_y = _find_titlebar_bottom(frame, search_h=60)
+
+        assert region.y > titlebar_y, (
+            f"Reading-mode frame must return region.y > titlebar_y={titlebar_y}, "
+            f"got region.y={region.y}"
+        )
+
+    def test_cover_page_does_not_set_crop_lock(self):
+        """_apply_crop_lock must NOT set locked_crop_y for a cover/image page.
+
+        Cover pages have region.y == titlebar_y.  If the lock were set here,
+        every subsequent reading-mode page would be cropped to a y value that
+        includes the Kindle header band, causing the header to bleed into the
+        PDF body pages.
+        """
+        from kindle_pdf_capture.cropper import _find_titlebar_bottom, detect_content_region
+        from kindle_pdf_capture.main import _apply_crop_lock
+
+        frame = _make_cover_frame(width=1200, height=900, titlebar_h=55)
+        region = detect_content_region(frame)
+        titlebar_y = _find_titlebar_bottom(frame, search_h=60)
+
+        _, lock_after_cover = _apply_crop_lock(region, frame, titlebar_y, None)
+
+        assert lock_after_cover is None, (
+            "Cover page must not set locked_crop_y; "
+            f"got {lock_after_cover} (region.y={region.y}, titlebar_y={titlebar_y})"
+        )
+
+    def test_reading_mode_page_sets_crop_lock(self):
+        """_apply_crop_lock must set locked_crop_y from the first reading-mode page."""
+        from kindle_pdf_capture.cropper import _find_titlebar_bottom, detect_content_region
+        from kindle_pdf_capture.main import _apply_crop_lock
+
+        frame = _make_reading_frame(width=1200, height=900, titlebar_h=55, header_end=130)
+        region = detect_content_region(frame)
+        titlebar_y = _find_titlebar_bottom(frame, search_h=60)
+
+        _, lock = _apply_crop_lock(region, frame, titlebar_y, None)
+
+        assert lock is not None, "First reading-mode page must set locked_crop_y"
+        assert lock > titlebar_y, f"Locked y must be above titlebar ({titlebar_y}), got {lock}"
+
+    def test_cover_then_reading_mode_lock_set_from_page2(self):
+        """Cover (page 1) → reading-mode (page 2): lock must come from page 2.
+
+        This is the canonical regression scenario.  If page 1 is a dark cover,
+        locked_crop_y must still be None after page 1 and set to page 2's
+        header-bottom y after page 2.
+        """
+        from kindle_pdf_capture.cropper import _find_titlebar_bottom, detect_content_region
+        from kindle_pdf_capture.main import _apply_crop_lock
+
+        cover_frame = _make_cover_frame(width=1200, height=900, titlebar_h=55)
+        reading_frame = _make_reading_frame(width=1200, height=900, titlebar_h=55, header_end=130)
+
+        # --- Page 1: cover ---
+        region1 = detect_content_region(cover_frame)
+        tb1 = _find_titlebar_bottom(cover_frame, search_h=60)
+        _, lock_after_p1 = _apply_crop_lock(region1, cover_frame, tb1, None)
+
+        assert lock_after_p1 is None, f"After cover page, lock must be None; got {lock_after_p1}"
+
+        # --- Page 2: reading mode ---
+        region2 = detect_content_region(reading_frame)
+        tb2 = _find_titlebar_bottom(reading_frame, search_h=60)
+        _, lock_after_p2 = _apply_crop_lock(region2, reading_frame, tb2, lock_after_p1)
+
+        assert lock_after_p2 is not None, "After first reading-mode page, lock must be set"
+        assert lock_after_p2 > tb2, f"Lock must be below titlebar ({tb2}), got {lock_after_p2}"
+
+    def test_crop_lock_propagates_correctly_to_page3(self):
+        """Lock set on page 2 must clamp page 3 if y drifts.
+
+        Simulates the common case where _find_header_bottom returns slightly
+        different y values due to font anti-aliasing between pages.
+        """
+        from kindle_pdf_capture.cropper import _find_titlebar_bottom, detect_content_region
+        from kindle_pdf_capture.main import _apply_crop_lock
+
+        cover_frame = _make_cover_frame(width=1200, height=900, titlebar_h=55)
+        reading_frame = _make_reading_frame(width=1200, height=900, titlebar_h=55, header_end=130)
+
+        # Page 1: cover → no lock
+        r1 = detect_content_region(cover_frame)
+        tb = _find_titlebar_bottom(cover_frame, search_h=60)
+        _, lock = _apply_crop_lock(r1, cover_frame, tb, None)
+        assert lock is None
+
+        # Page 2: reading mode → sets lock
+        r2 = detect_content_region(reading_frame)
+        tb2 = _find_titlebar_bottom(reading_frame, search_h=60)
+        r2, lock = _apply_crop_lock(r2, reading_frame, tb2, lock)
+        assert lock is not None
+        page2_lock = lock
+
+        # Page 3: reading mode with simulated 3px drift in region.y
+        from kindle_pdf_capture.cropper import ContentRegion
+
+        drifted_region = ContentRegion(x=0, y=r2.y + 3, w=1200, h=900 - (r2.y + 3))
+        r3, lock3 = _apply_crop_lock(drifted_region, reading_frame, tb2, lock)
+
+        assert lock3 == page2_lock, "Lock must not change after being set"
+        assert r3.y == page2_lock, f"Page 3 y must be clamped to lock={page2_lock}, got {r3.y}"
