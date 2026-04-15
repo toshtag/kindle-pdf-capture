@@ -8,6 +8,9 @@ Coordinate system: (x, y, w, h) — OpenCV convention.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
+import cv2
 import numpy as np
 import pytest
 from PIL import Image
@@ -584,6 +587,57 @@ def _make_kindle_window_with_header_and_rule(
     )
 
     return img, rule_bottom, rule_bottom
+
+
+# ---------------------------------------------------------------------------
+# detect_content_region: cvtColor call count (performance regression guard)
+# ---------------------------------------------------------------------------
+
+
+class TestCvtColorCallCount:
+    """detect_content_region must not call cvtColor more than twice per frame.
+
+    Previously the call chain (detect_content_region -> _find_header_bottom ->
+    _find_titlebar_bottom) triggered up to 4 full-frame BGR->GRAY conversions
+    per page.  After the optimisation, the top-level gray conversion is computed
+    once and reused, so the total count must be at most 2.
+    """
+
+    def test_cvtcolor_called_at_most_twice_for_reading_mode_page(self) -> None:
+        img, _ = _make_reading_mode_page()
+        original_cvtColor = cv2.cvtColor
+        call_count = []
+
+        def counting_cvtColor(src, code, *args, **kwargs):
+            if code == cv2.COLOR_BGR2GRAY:
+                call_count.append(1)
+            return original_cvtColor(src, code, *args, **kwargs)
+
+        with patch("cv2.cvtColor", side_effect=counting_cvtColor):
+            detect_content_region(img)
+
+        assert len(call_count) <= 2, (
+            f"Expected at most 2 BGR->GRAY conversions, got {len(call_count)}. "
+            "Possible cvtColor duplication regression in detect_content_region."
+        )
+
+    def test_cvtcolor_called_at_most_twice_for_dark_chrome_page(self) -> None:
+        img, _ = _make_dark_chrome_page()
+        original_cvtColor = cv2.cvtColor
+        call_count = []
+
+        def counting_cvtColor(src, code, *args, **kwargs):
+            if code == cv2.COLOR_BGR2GRAY:
+                call_count.append(1)
+            return original_cvtColor(src, code, *args, **kwargs)
+
+        with patch("cv2.cvtColor", side_effect=counting_cvtColor):
+            detect_content_region(img)
+
+        assert len(call_count) <= 2, (
+            f"Expected at most 2 BGR->GRAY conversions, got {len(call_count)}. "
+            "Possible cvtColor duplication regression in detect_content_region."
+        )
 
 
 class TestHeaderRuleMargin:
