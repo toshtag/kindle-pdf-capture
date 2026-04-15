@@ -543,3 +543,96 @@ class TestDetectContentRegionWithHeader:
         )
         # Must still start within top_padding rows of the header bottom
         assert region.y >= content_start - 45
+
+
+# ---------------------------------------------------------------------------
+# detect_content_region: header rule margin
+# ---------------------------------------------------------------------------
+
+
+def _make_kindle_window_with_header_and_rule(
+    width: int = 1200,
+    height: int = 900,
+    title_bar_height: int = 56,
+    header_height: int = 40,
+    divider_thickness: int = 2,
+) -> tuple[np.ndarray, int, int]:
+    """Build a synthetic Kindle window that has a visible rule line below the header.
+
+    Identical to _make_kindle_window_with_header, but also returns the bottom
+    edge of the divider (rule_bottom) so tests can assert that the crop starts
+    below the rule.
+
+    Returns (bgr_image, content_start_y, rule_bottom_y).
+    """
+    img = np.full((height, width, 3), 255, dtype=np.uint8)
+
+    img[:title_bar_height, :] = 80
+
+    header_top = title_bar_height
+    header_bottom = header_top + header_height
+    img[header_top:header_bottom, :] = 230
+    text_y = header_top + 10
+    img[text_y : text_y + 14, width // 4 : 3 * width // 4] = 60
+
+    divider_y = header_bottom
+    rule_bottom = divider_y + divider_thickness
+    img[divider_y:rule_bottom, :] = 30
+
+    img = _draw_text_block(
+        img, x=80, y=rule_bottom + 20, w=width - 160, h=height - rule_bottom - 60
+    )
+
+    return img, rule_bottom, rule_bottom
+
+
+class TestHeaderRuleMargin:
+    """detect_content_region must crop below the header rule line.
+
+    When a Kindle page has a horizontal rule below the book title, the
+    detected content_y must be >= rule_bottom so the rule never appears
+    in the output image.
+    """
+
+    def test_crop_starts_below_rule_line(self) -> None:
+        """content_y must be at or below the bottom edge of the divider rule."""
+        img, _content_start, rule_bottom = _make_kindle_window_with_header_and_rule()
+
+        region = detect_content_region(img)
+
+        assert region.y >= rule_bottom, (
+            f"Crop started above rule: region.y={region.y}, rule_bottom={rule_bottom}"
+        )
+
+    def test_crop_excludes_rule_for_various_divider_thicknesses(self) -> None:
+        """Rule exclusion works regardless of divider thickness (1-4 px)."""
+        for thickness in (1, 2, 3, 4):
+            img, _, rule_bottom = _make_kindle_window_with_header_and_rule(
+                divider_thickness=thickness
+            )
+            region = detect_content_region(img)
+            assert region.y >= rule_bottom, (
+                f"thickness={thickness}: region.y={region.y} < rule_bottom={rule_bottom}"
+            )
+
+    def test_crop_y_consistent_with_and_without_rule(self) -> None:
+        """Pages with a rule should crop at the same y (or lower) as pages without.
+
+        If the rule is simply absorbed by the fixed margin, the content_y for
+        a ruled page must not be *higher* than for an unruled page — meaning
+        we never accidentally include the rule in the output.
+        """
+        img_ruled, _, rule_bottom = _make_kindle_window_with_header_and_rule()
+        img_plain, _content_start_plain = _make_kindle_window_with_header()
+
+        region_ruled = detect_content_region(img_ruled)
+        region_plain = detect_content_region(img_plain)
+
+        # Ruled page must not start above the rule bottom
+        assert region_ruled.y >= rule_bottom, (
+            f"Ruled page crops into rule: y={region_ruled.y}, rule_bottom={rule_bottom}"
+        )
+        # And should not be dramatically lower than the plain page (within 30 px)
+        assert region_ruled.y <= region_plain.y + 30, (
+            f"Ruled crop too far down: ruled.y={region_ruled.y}, plain.y={region_plain.y}"
+        )

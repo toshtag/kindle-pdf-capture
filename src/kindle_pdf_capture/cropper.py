@@ -25,6 +25,12 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Fixed pixel offset added to header_y to clear any horizontal rule that may
+# appear immediately below the book-title band.  Kindle places a 1-2 px rule
+# there on some pages; adding 15 px absorbs it without requiring per-page
+# rule detection.
+_HEADER_RULE_MARGIN: int = 20
+
 
 @dataclass
 class ContentRegion:
@@ -359,7 +365,7 @@ def detect_content_region(
 
     header_y = _find_header_bottom(bgr)
     if header_y > 0:
-        content_y = max(titlebar_y, header_y - top_padding)
+        content_y = header_y + _HEADER_RULE_MARGIN
         logger.debug(
             "Reading-mode page: returning full-width rect at y=%d (header_y=%d, titlebar_y=%d).",
             content_y,
