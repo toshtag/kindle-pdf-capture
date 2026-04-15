@@ -20,7 +20,7 @@ except ImportError:  # optional dependency — only needed when --ocr is used
 
 logger = logging.getLogger(__name__)
 
-_ocrmypdf_logging_configured = False
+_ocrmypdf_loggers_silenced = False
 
 # Tesseract language code pattern: three lowercase letters, optionally repeated
 # with '+' as separator.  Examples: "jpn", "eng", "jpn+eng", "jpn+eng+fra".
@@ -91,13 +91,18 @@ def run_ocr(
         )
         return OcrResult(status=OcrStatus.FAILED, output=dst, returncode=-1)
 
-    # Suppress ocrmypdf's own log handlers (WARNING, INFO) so they don't
-    # interleave with the Rich progress bar. ERROR-level messages still surface.
-    # Guard against duplicate handler registration on repeated calls.
-    global _ocrmypdf_logging_configured
-    if not _ocrmypdf_logging_configured:
-        _ocrmypdf.configure_logging(_ocrmypdf.Verbosity.quiet)
-        _ocrmypdf_logging_configured = True
+    # ocrmypdf logs under "ocrmypdf" with propagate=True by default, so its
+    # DEBUG/WARNING records bubble up to kpc's root handler and interleave with
+    # the Rich progress bar.  Set propagate=False and raise the level to ERROR
+    # on all affected loggers so only real errors surface.  Guard against
+    # repeated calls accumulating handlers.
+    global _ocrmypdf_loggers_silenced
+    if not _ocrmypdf_loggers_silenced:
+        for name in ("ocrmypdf", "pdfminer", "PIL", "fontTools"):
+            _log = logging.getLogger(name)
+            _log.propagate = False
+            _log.setLevel(logging.ERROR)
+        _ocrmypdf_loggers_silenced = True
 
     try:
         exit_code = _ocrmypdf.ocr(
