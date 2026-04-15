@@ -25,10 +25,33 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Thresholds (single source of truth — import these in tests to avoid
+# duplicating magic numbers)
+# ---------------------------------------------------------------------------
+
+# Mean pixel value of the 10 rows immediately below the macOS title bar.
+# Used by detect_content_region to distinguish reading-mode from cover/image.
+#   Reading-mode Kindle header background: ~230-250  (above this threshold)
+#   Cover chrome / dark illustration:       < 200    (below this threshold)
+READING_MODE_MEAN_THRESHOLD: int = 200
+
+# Sobel edge magnitude threshold for _find_titlebar_bottom.
+_TITLEBAR_EDGE_THRESH: float = 20.0
+
+# Row std-dev thresholds for _find_header_bottom.
+#   >= _HEADER_TEXT_STD_MIN  → inside the book-title text block
+#   <  _HEADER_QUIET_STD_MAX → uniform row (header ended here)
+_HEADER_TEXT_STD_MIN: float = 10.0
+_HEADER_QUIET_STD_MAX: float = 5.0
+
+# Brightness threshold for _detect_by_brightness (Phase-0 cover detection).
+# Kindle chrome background is ~16-17; page content is brighter.
+_COVER_BRIGHTNESS_THRESHOLD: int = 20
+
 # Fixed pixel offset added to header_y to clear any horizontal rule that may
 # appear immediately below the book-title band.  Kindle places a 1-2 px rule
-# there on some pages; adding 15 px absorbs it without requiring per-page
-# rule detection.
+# there on some pages; adding this margin absorbs it without per-page detection.
 _HEADER_RULE_MARGIN: int = 20
 
 
@@ -93,10 +116,9 @@ def _find_titlebar_bottom(
     sobel = cv2.Sobel(gray.astype(np.float64), cv2.CV_64F, 0, 1, ksize=3)
     abs_sobel = np.abs(sobel)
 
-    edge_thresh = 20.0
     edge_w = max(1, w_img // 20)  # leftmost / rightmost 5 %
 
-    edge_mask = abs_sobel > edge_thresh
+    edge_mask = abs_sobel > _TITLEBAR_EDGE_THRESH
     row_density = edge_mask.sum(axis=1) / w_img
     left_density = edge_mask[:, :edge_w].sum(axis=1) / edge_w
     right_density = edge_mask[:, w_img - edge_w :].sum(axis=1) / edge_w
@@ -114,8 +136,8 @@ def _find_header_bottom(bgr: np.ndarray) -> int:
     The Kindle reading-mode header consists of (top to bottom):
       1. macOS title bar  -- detected by _find_titlebar_bottom(search_h=60).
       2. Uniform chrome band (light-gray background, no text).
-      3. Book-title text  -- non-uniform rows (row std >= 10).
-      4. Divider / quiet band -- uniform again (row std < 5).  <-- return here
+      3. Book-title text  -- non-uniform rows (row std >= _HEADER_TEXT_STD_MIN).
+      4. Divider / quiet band -- uniform again (row std < _HEADER_QUIET_STD_MAX).  <-- return here
 
     Scans up to 100 rows below the title bar for the text block, then
     returns the first quiet row after it.
@@ -138,10 +160,10 @@ def _find_header_bottom(bgr: np.ndarray) -> int:
     for y in range(titlebar_y, search_end):
         row_std = float(gray[y].std())
         if not title_block_started:
-            if row_std >= 10.0:
+            if row_std >= _HEADER_TEXT_STD_MIN:
                 title_block_started = True
         else:
-            if row_std < 5.0:
+            if row_std < _HEADER_QUIET_STD_MAX:
                 logger.debug("Header bottom at y=%d (titlebar_y=%d)", y, titlebar_y)
                 return y
 
@@ -237,7 +259,7 @@ def _detect_by_brightness(
     Algorithm:
       1. _has_dark_border confirms that two opposing edges are dark.
          Returns None immediately if the border is absent (not a cover frame).
-      2. Threshold at 20: everything brighter is page content.
+      2. Threshold at _COVER_BRIGHTNESS_THRESHOLD: everything brighter is page content.
       3. Morphological close (20x20) merges the page into one solid blob.
       4. Largest qualifying contour -> bounding box = page rect.
 
@@ -252,7 +274,7 @@ def _detect_by_brightness(
     if not _has_dark_border(gray):
         return None
 
-    _, mask = cv2.threshold(gray, 20, 255, cv2.THRESH_BINARY)
+    _, mask = cv2.threshold(gray, _COVER_BRIGHTNESS_THRESHOLD, 255, cv2.THRESH_BINARY)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (20, 20))
     closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
@@ -299,37 +321,38 @@ def detect_content_region(
            ▼
         below_titlebar_mean  (mean of rows [titlebar_y : titlebar_y+10])
            │
-           ├─ mean < 200  ──► COVER / IMAGE PAGE
+           ├─ mean < READING_MODE_MEAN_THRESHOLD  ──► COVER / IMAGE PAGE
            │                  Dark Kindle chrome present; return full frame
            │                  from titlebar_y downward.
            │                  ContentRegion(x=0, y=titlebar_y, w=w, h=h-titlebar_y)
            │
-           └─ mean >= 200 ──► READING-MODE PAGE (light-gray Kindle header)
+           └─ mean >= READING_MODE_MEAN_THRESHOLD ──► READING-MODE PAGE (light-gray Kindle header)
                               │
                               ▼
                            _find_header_bottom(bgr)
                               │   _find_titlebar_bottom(search_h=60) to anchor,
                               │   then std-dev scan for book-title text block.
-                              │   Returns first quiet row (std < 5) after text.
+                              │   Returns first quiet row (std < _HEADER_QUIET_STD_MAX) after text.
                               │
                               ├─ header_y > 0 ──► NORMAL READING PAGE
-                              │                   content_y = max(titlebar_y, header_y - top_padding)
+                              │                   content_y = header_y + _HEADER_RULE_MARGIN
                               │                   ContentRegion(x=0, y=content_y, w=w, h=h-content_y)
                               │
                               └─ header_y == 0 ──► BRIGHT COVER / NO-HEADER PAGE
                                                    White cover or image page that passes
-                                                   the mean-200 test but has no title text.
+                                                   the mean threshold but has no title text.
                                                    Fall back to titlebar_y.
                                                    ContentRegion(x=0, y=titlebar_y, w=w, h=h-titlebar_y)
 
-    Why mean-200 and not _has_dark_border?
-    ---------------------------------------
+    Why READING_MODE_MEAN_THRESHOLD and not _has_dark_border?
+    ----------------------------------------------------------
     After Phase 0 resizes the window the dark chrome gutters disappear, so
     _has_dark_border would always return False for subsequent pages.  Instead
     we sample the 10 rows immediately below the macOS title bar:
       - Reading-mode header background: ~230-250 (very light gray)
       - Cover chrome / dark illustration: < 200
-    Threshold 200 sits safely between these two bands for all tested books.
+    READING_MODE_MEAN_THRESHOLD (200) sits safely between these two bands
+    for all tested books.
 
     Args:
         bgr: uint8 BGR ndarray (OpenCV format).
@@ -353,7 +376,7 @@ def detect_content_region(
     below_titlebar_mean = (
         float(gray_full[titlebar_y : titlebar_y + 10].mean()) if titlebar_y < h_img else 255.0
     )
-    is_reading_mode = below_titlebar_mean >= 200
+    is_reading_mode = below_titlebar_mean >= READING_MODE_MEAN_THRESHOLD
 
     if not is_reading_mode:
         logger.debug(
