@@ -1099,3 +1099,154 @@ class TestCoverPageRegression:
 
         assert lock3 == page2_lock, "Lock must not change after being set"
         assert r3.y == page2_lock, f"Page 3 y must be clamped to lock={page2_lock}, got {r3.y}"
+
+
+# ---------------------------------------------------------------------------
+# Logging level: WARNING by default, DEBUG with --debug
+# ---------------------------------------------------------------------------
+
+
+class TestLoggingLevel:
+    """_setup_logging must set WARNING (not INFO) without --debug.
+
+    Motivation: Without this, every page produces an INFO line on stdout,
+    which is noisy and makes it hard to distinguish real progress feedback
+    (rich status/spinner) from log chatter.
+    """
+
+    def test_default_logging_level_is_warning(self) -> None:
+        import logging
+
+        from kindle_pdf_capture.main import _setup_logging
+
+        _setup_logging(debug=False)
+        root = logging.getLogger()
+        assert root.level == logging.WARNING, (
+            f"Expected WARNING ({logging.WARNING}), got {root.level}. "
+            "INFO-level logs should not appear without --debug."
+        )
+
+    def test_debug_flag_sets_debug_level(self) -> None:
+        import logging
+
+        from kindle_pdf_capture.main import _setup_logging
+
+        _setup_logging(debug=True)
+        root = logging.getLogger()
+        assert root.level == logging.DEBUG
+
+
+# ---------------------------------------------------------------------------
+# Rich status: console.status() used during PDF build and OCR
+# ---------------------------------------------------------------------------
+
+
+class TestProgressStatus:
+    """console.status() must be used for long-running phases so the user
+    sees a spinner instead of silence.
+    """
+
+    def _common_patches(self, tmp_path, out_dir, extra=None):
+        from kindle_pdf_capture.cropper import ContentRegion
+        from kindle_pdf_capture.ocr import OcrResult, OcrStatus
+        from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
+
+        window = _make_window()
+        frame = _content_bgr()
+
+        (out_dir / "cropped").mkdir(parents=True)
+        (out_dir / "pdf").mkdir(parents=True)
+        (out_dir / "logs").mkdir(parents=True)
+        (out_dir / "cropped" / "page_0001.jpg").write_bytes(b"FAKE")
+
+        patches = [
+            patch("kindle_pdf_capture.main.check_accessibility"),
+            patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
+            patch("kindle_pdf_capture.main.focus_window"),
+            patch("kindle_pdf_capture.main.capture_window", return_value=frame),
+            patch("kindle_pdf_capture.main.send_page_turn_key"),
+            patch(
+                "kindle_pdf_capture.main.wait_for_render",
+                return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
+            ),
+            patch(
+                "kindle_pdf_capture.main.detect_content_region",
+                return_value=ContentRegion(x=50, y=50, w=1100, h=800),
+            ),
+            patch("kindle_pdf_capture.main.normalize_image", return_value=frame),
+            patch("kindle_pdf_capture.main.save_jpeg"),
+            patch("kindle_pdf_capture.main.build_pdf"),
+            patch("kindle_pdf_capture.main.optimise_pdf"),
+            patch(
+                "kindle_pdf_capture.main.run_ocr",
+                return_value=OcrResult(status=OcrStatus.SUCCESS, output="", returncode=0),
+            ),
+            patch("kindle_pdf_capture.main.time.sleep"),
+        ]
+        if extra:
+            patches.extend(extra)
+        return patches
+
+    def test_console_status_called_during_pdf_build(self, tmp_path: Path) -> None:
+        """console.status() must be entered when building the PDF."""
+        from contextlib import ExitStack
+
+        runner = CliRunner()
+        out_dir = tmp_path / "out"
+        status_calls: list[str] = []
+
+        import kindle_pdf_capture.main as main_mod
+
+        real_status = main_mod.console.status
+
+        def _recording_status(msg, **kw):
+            status_calls.append(str(msg))
+            return real_status(msg, **kw)
+
+        with ExitStack() as stack:
+            for p in self._common_patches(tmp_path, out_dir):
+                stack.enter_context(p)
+            stack.enter_context(
+                patch.object(main_mod.console, "status", side_effect=_recording_status)
+            )
+            result = runner.invoke(
+                cli,
+                ["--out", str(out_dir), "--start-delay", "0", "--max-pages", "1"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert any("PDF" in s or "pdf" in s for s in status_calls), (
+            f"Expected console.status() to be called for PDF build, got: {status_calls}"
+        )
+
+    def test_console_status_called_during_ocr(self, tmp_path: Path) -> None:
+        """console.status() must be entered when running OCR."""
+        from contextlib import ExitStack
+
+        runner = CliRunner()
+        out_dir = tmp_path / "out"
+        status_calls: list[str] = []
+
+        import kindle_pdf_capture.main as main_mod
+
+        real_status = main_mod.console.status
+
+        def _recording_status(msg, **kw):
+            status_calls.append(str(msg))
+            return real_status(msg, **kw)
+
+        with ExitStack() as stack:
+            for p in self._common_patches(tmp_path, out_dir):
+                stack.enter_context(p)
+            stack.enter_context(
+                patch.object(main_mod.console, "status", side_effect=_recording_status)
+            )
+            result = runner.invoke(
+                cli,
+                ["--out", str(out_dir), "--start-delay", "0", "--max-pages", "1", "--ocr"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert any("OCR" in s or "ocr" in s for s in status_calls), (
+            f"Expected console.status() to be called for OCR, got: {status_calls}"
+        )
