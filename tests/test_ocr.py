@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from kindle_pdf_capture.ocr import OcrResult, OcrStatus, run_ocr
+from kindle_pdf_capture.ocr import OcrResult, OcrStatus, run_ocr, validate_ocr_lang
 
 # ---------------------------------------------------------------------------
 # OcrResult / OcrStatus
@@ -139,6 +139,54 @@ class TestRunOcrFailure:
         # fails — either way, result.succeeded must be False
         assert result.succeeded is False
 
+
+# ---------------------------------------------------------------------------
+# validate_ocr_lang
+# ---------------------------------------------------------------------------
+
+
+class TestValidateOcrLang:
+    def test_valid_single_lang(self) -> None:
+        assert validate_ocr_lang("jpn") is True
+
+    def test_valid_eng(self) -> None:
+        assert validate_ocr_lang("eng") is True
+
+    def test_valid_combined_lang(self) -> None:
+        assert validate_ocr_lang("jpn+eng") is True
+
+    def test_valid_triple_lang(self) -> None:
+        assert validate_ocr_lang("jpn+eng+fra") is True
+
+    def test_invalid_uppercase(self) -> None:
+        assert validate_ocr_lang("JPN") is False
+
+    def test_invalid_empty(self) -> None:
+        assert validate_ocr_lang("") is False
+
+    def test_invalid_path_traversal(self) -> None:
+        assert validate_ocr_lang("../etc/passwd") is False
+
+    def test_invalid_shell_metachar(self) -> None:
+        assert validate_ocr_lang("eng$(echo)") is False
+
+    def test_invalid_too_short(self) -> None:
+        assert validate_ocr_lang("en") is False
+
+    def test_invalid_too_long(self) -> None:
+        assert validate_ocr_lang("english") is False
+
+    def test_invalid_numbers(self) -> None:
+        assert validate_ocr_lang("eng1") is False
+
+    def test_invalid_starts_with_plus(self) -> None:
+        assert validate_ocr_lang("+eng") is False
+
+    def test_invalid_ends_with_plus(self) -> None:
+        assert validate_ocr_lang("eng+") is False
+
+
+class TestRunOcrSideEffects:
     def test_original_pdf_unaffected_on_ocr_failure(self, tmp_path: Path) -> None:
         """book.pdf must exist and be unchanged if OCR fails."""
         src = tmp_path / "book.pdf"

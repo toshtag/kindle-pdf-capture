@@ -43,7 +43,7 @@ from rich.logging import RichHandler
 
 from kindle_pdf_capture.cropper import CropError, _find_titlebar_bottom, detect_content_region
 from kindle_pdf_capture.normalize import normalize_image, save_jpeg
-from kindle_pdf_capture.ocr import run_ocr
+from kindle_pdf_capture.ocr import run_ocr, validate_ocr_lang
 from kindle_pdf_capture.orchestrator import (
     CaptureConfig,
     CaptureSession,
@@ -358,7 +358,7 @@ def _run_capture(
                         "Page %d: render timed out after %.1fs", page_num, wait_result.elapsed
                     )
 
-                next_frame = capture_window(window)
+                next_frame = wait_result.last_frame or capture_window(window)
                 session.record_duplicate(next_frame)
 
                 page_num += 1
@@ -502,6 +502,13 @@ def cli(
     """Capture Kindle for Mac pages and assemble them into a PDF."""
     _setup_logging(debug)
     log = logging.getLogger(__name__)
+
+    if ocr and not validate_ocr_lang(ocr_lang):
+        raise click.BadParameter(
+            f"Invalid language code '{ocr_lang}'. "
+            "Use three-letter Tesseract codes, e.g. 'jpn', 'eng', 'jpn+eng'.",
+            param_hint="--ocr-lang",
+        )
 
     key_code = KEY_LEFT if direction == "left" else KEY_RIGHT
 

@@ -9,11 +9,25 @@ from __future__ import annotations
 
 import enum
 import logging
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Tesseract language code pattern: three lowercase letters, optionally repeated
+# with '+' as separator.  Examples: "jpn", "eng", "jpn+eng", "jpn+eng+fra".
+_LANG_RE = re.compile(r"^[a-z]{3}(\+[a-z]{3})*$")
+
+
+def validate_ocr_lang(lang: str) -> bool:
+    """Return True if *lang* is a well-formed Tesseract language string.
+
+    Valid examples: ``"jpn"``, ``"eng"``, ``"jpn+eng"``.
+    Rejects empty strings, uppercase, path characters, or shell metacharacters.
+    """
+    return bool(_LANG_RE.match(lang))
 
 
 class OcrStatus(enum.Enum):
