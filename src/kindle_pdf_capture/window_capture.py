@@ -300,8 +300,7 @@ def find_kindle_window(
     Steps:
     1. ``get_pid_fn(process_name)`` → PID (raises if not found).
     2. ``list_windows_fn()`` → filter by PID, layer, visibility, size.
-    3. ``capture_fn(window)`` → screenshot.
-    4. ``_is_content_page(screenshot)`` → verify it's a reading page.
+    3. ``capture_fn(window)`` → screenshot (black/white guard only).
 
     Args:
         get_pid_fn: Callable that returns the PID for a process name.
@@ -351,12 +350,6 @@ def find_kindle_window(
             "The Kindle window appears to be loading. "
             "Please wait until a book page is visible and try again."
         )
-    if not _is_content_page(screenshot):
-        logger.warning(
-            "The Kindle window does not look like a standard reading page "
-            "(it may be showing a cover or image page). Continuing anyway."
-        )
-
     return window
 
 
