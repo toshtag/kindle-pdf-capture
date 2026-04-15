@@ -202,6 +202,31 @@ class TestWaitForRender:
         )
         assert result.last_frame is not None
 
+    def test_last_frame_is_ndarray_not_bool_ambiguous(self) -> None:
+        """last_frame is a numpy array — bool(array) raises ValueError.
+
+        Callers must use ``is not None`` to check presence, not ``or`` / ``if``.
+        This test documents that last_frame is always an ndarray (never a scalar
+        or None after convergence), so the ``or`` idiom would raise ValueError.
+        """
+        stable = _frame(200)
+        frames = [stable, stable]
+        result = wait_for_render(
+            capture_fn=_make_capture_fn(frames),
+            threshold=1.0,
+            timeout=5.0,
+            poll_interval=0.0,
+            stable_count=2,
+        )
+        assert result.last_frame is not None
+        assert isinstance(result.last_frame, np.ndarray)
+        # Confirm that using ``or`` on the array would raise — callers must use
+        # ``is not None`` instead.
+        import pytest as _pytest
+
+        with _pytest.raises(ValueError, match="ambiguous"):
+            _ = result.last_frame or _frame(0)
+
     def test_accepts_callable_capture_fn(self) -> None:
         """capture_fn can be any callable returning a BGR ndarray."""
         call_count = 0
