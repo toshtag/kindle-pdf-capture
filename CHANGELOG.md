@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-04-15
+
+### Changed
+
+- Default log level lowered from `INFO` to `WARNING`; `--debug` still enables
+  full debug output. Per-page `INFO` lines no longer appear during a normal run.
+- Capture loop now shows an inline `rich` spinner that updates in-place
+  (`Capturing page N/MAX …`) instead of emitting a new log line per page.
+- PDF assembly and OCR phases are now wrapped in `console.status()` spinners so
+  the user always sees activity feedback during long-running steps.
+- Completion of PDF build and OCR now prints a `✓` summary line
+  (`✓ PDF saved → …`, `✓ OCR PDF saved → …`) instead of an INFO log.
+
 ## [1.0.3] - 2026-04-15
 
 ### Fixed
@@ -192,7 +205,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bilingual documentation (English and Japanese)
 - GitHub PR/issue templates, Dependabot, and security policy
 
-[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.0...v1.0.1
