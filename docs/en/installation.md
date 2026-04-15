@@ -21,22 +21,34 @@ pip install kindle-pdf-capture
 
 ## Install with OCR support
 
-OCR requires [Tesseract](https://github.com/tesseract-ocr/tesseract) and [Ghostscript](https://www.ghostscript.com/).
+OCR requires [Tesseract](https://github.com/tesseract-ocr/tesseract) and [Ghostscript](https://www.ghostscript.com/) as system dependencies, plus the `[ocr]` extra which installs `ocrmypdf`.
 
 ```bash
-# Install system dependencies (macOS)
+# 1. Install system dependencies (macOS)
 brew install tesseract tesseract-lang ghostscript
 
-# Install the package with OCR extra
+# 2. Install the package with the OCR extra
+uv tool install "kindle-pdf-capture[ocr]"
+# or with pip:
 pip install "kindle-pdf-capture[ocr]"
 ```
+
+> **Note:** The `[ocr]` extra installs `ocrmypdf` automatically.
+> Without it, running `kpc --ocr` will fail with "No such file or directory: 'ocrmypdf'".
 
 ## Install from source
 
 ```bash
 git clone https://github.com/toshtag/kindle-pdf-capture.git
 cd kindle-pdf-capture
+
+# Without OCR support
 uv sync
+
+# With OCR support (also installs ocrmypdf)
+brew install tesseract tesseract-lang ghostscript
+uv sync --all-extras
+
 uv run kpc --help
 ```
 
