@@ -346,8 +346,12 @@ def _run_capture(
                     page_num += 1
                     continue
 
-                total = config.max_pages
-                status.update(f"[bold]Capturing[/bold] page {page_num}/{total} …")
+                page_label = (
+                    f"{page_num}/{config.max_pages}"
+                    if config.max_pages is not None
+                    else str(page_num)
+                )
+                status.update(f"[bold]Capturing[/bold] page {page_label} …")
 
                 locked_crop_y = _capture_one_page(page_num, window, config, session, locked_crop_y)
 
@@ -391,8 +395,8 @@ def _run_capture(
 
     if config.ocr:
         ocr_path = config.out_dir / "pdf" / "book_ocr.pdf"
-        with console.status(f"[bold]Running OCR[/bold] ({config.ocr_lang}) …"):
-            result = run_ocr(pdf_path, ocr_path, lang=config.ocr_lang, optimize=config.ocr_optimize)
+        console.print(f"[bold]Running OCR[/bold] ({config.ocr_lang}) …")
+        result = run_ocr(pdf_path, ocr_path, lang=config.ocr_lang, optimize=config.ocr_optimize)
         if result.succeeded:
             console.print(f"[green]✓[/green] OCR PDF saved → {ocr_path}")
         else:
@@ -413,9 +417,10 @@ def _run_capture(
 )
 @click.option(
     "--max-pages",
-    default=1000,
-    show_default=True,
-    help="Maximum number of pages to capture.",
+    default=None,
+    type=int,
+    show_default=False,
+    help="Maximum number of pages to capture (default: no limit).",
 )
 @click.option(
     "--resize-width",

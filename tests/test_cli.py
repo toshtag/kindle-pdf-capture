@@ -1219,27 +1219,27 @@ class TestProgressStatus:
             f"Expected console.status() to be called for PDF build, got: {status_calls}"
         )
 
-    def test_console_status_called_during_ocr(self, tmp_path: Path) -> None:
-        """console.status() must be entered when running OCR."""
+    def test_ocr_progress_message_printed(self, tmp_path: Path) -> None:
+        """console.print() must announce OCR start (ocrmypdf owns the progress bar)."""
         from contextlib import ExitStack
 
         runner = CliRunner()
         out_dir = tmp_path / "out"
-        status_calls: list[str] = []
+        print_calls: list[str] = []
 
         import kindle_pdf_capture.main as main_mod
 
-        real_status = main_mod.console.status
+        real_print = main_mod.console.print
 
-        def _recording_status(msg, **kw):
-            status_calls.append(str(msg))
-            return real_status(msg, **kw)
+        def _recording_print(msg, **kw):
+            print_calls.append(str(msg))
+            return real_print(msg, **kw)
 
         with ExitStack() as stack:
             for p in self._common_patches(tmp_path, out_dir):
                 stack.enter_context(p)
             stack.enter_context(
-                patch.object(main_mod.console, "status", side_effect=_recording_status)
+                patch.object(main_mod.console, "print", side_effect=_recording_print)
             )
             result = runner.invoke(
                 cli,
@@ -1247,6 +1247,6 @@ class TestProgressStatus:
             )
 
         assert result.exit_code == 0, result.output
-        assert any("OCR" in s or "ocr" in s for s in status_calls), (
-            f"Expected console.status() to be called for OCR, got: {status_calls}"
+        assert any("OCR" in s or "ocr" in s for s in print_calls), (
+            f"Expected console.print() to announce OCR start, got: {print_calls}"
         )
