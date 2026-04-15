@@ -20,6 +20,8 @@ except ImportError:  # optional dependency — only needed when --ocr is used
 
 logger = logging.getLogger(__name__)
 
+_ocrmypdf_logging_configured = False
+
 # Tesseract language code pattern: three lowercase letters, optionally repeated
 # with '+' as separator.  Examples: "jpn", "eng", "jpn+eng", "jpn+eng+fra".
 _LANG_RE = re.compile(r"^[a-z]{3}(\+[a-z]{3})*$")
@@ -88,6 +90,14 @@ def run_ocr(
             "ocrmypdf is not installed. Install with: pip install 'kindle-pdf-capture[ocr]'"
         )
         return OcrResult(status=OcrStatus.FAILED, output=dst, returncode=-1)
+
+    # Suppress ocrmypdf's own log handlers (WARNING, INFO) so they don't
+    # interleave with the Rich progress bar. ERROR-level messages still surface.
+    # Guard against duplicate handler registration on repeated calls.
+    global _ocrmypdf_logging_configured
+    if not _ocrmypdf_logging_configured:
+        _ocrmypdf.configure_logging(_ocrmypdf.Verbosity.quiet)
+        _ocrmypdf_logging_configured = True
 
     try:
         exit_code = _ocrmypdf.ocr(
