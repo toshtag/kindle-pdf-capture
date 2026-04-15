@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-04-15
+
+### Fixed
+
+- Horizontal rule lines rendered by Kindle immediately below the book-title
+  header band are now always excluded from the cropped output.  A fixed
+  `_HEADER_RULE_MARGIN = 20` px offset is added to `header_y` when computing
+  `content_y`, replacing the previous `header_y - top_padding` formula that
+  moved the crop boundary upward and could leave the rule visible.
+
 ## [1.0.2] - 2026-04-15
 
 ### Fixed
@@ -182,7 +192,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bilingual documentation (English and Japanese)
 - GitHub PR/issue templates, Dependabot, and security policy
 
-[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v0.2.0...v1.0.0
