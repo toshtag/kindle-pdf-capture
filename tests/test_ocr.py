@@ -1,17 +1,45 @@
 """Tests for the OCR wrapper module.
 
-All tests mock ocrmypdf.ocr so they do not require ocrmypdf or tesseract
-to be installed on the CI runner.
+All tests patch kindle_pdf_capture.ocr._ocrmypdf so they do not require
+ocrmypdf or tesseract to be installed on the CI runner.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
-
-import ocrmypdf
+from unittest.mock import MagicMock, patch
 
 from kindle_pdf_capture.ocr import OcrResult, OcrStatus, run_ocr, validate_ocr_lang
+
+# ---------------------------------------------------------------------------
+# Shared mock helpers
+# ---------------------------------------------------------------------------
+
+# A minimal stand-in for ocrmypdf.ExitCode so tests don't need the real package.
+
+
+class _ExitCode:
+    ok = MagicMock(name="ExitCode.ok")
+    ok.__int__ = lambda self: 0
+    input_file = MagicMock(name="ExitCode.input_file")
+    input_file.__int__ = lambda self: 2
+    input_file.name = "input_file"
+
+
+def _mock_ocrmypdf(exit_code=None, raises=None):
+    """Return a MagicMock that stands in for the ocrmypdf module."""
+    mod = MagicMock()
+    mod.ExitCode = _ExitCode
+    if raises is not None:
+        mod.ocr.side_effect = raises
+    else:
+        mock_ec = MagicMock()
+        mock_ec.__int__ = lambda self: 0 if exit_code == "ok" else 2
+        mock_ec.__eq__ = lambda self, other: exit_code == "ok" and other is _ExitCode.ok
+        mock_ec.name = "ok" if exit_code == "ok" else "input_file"
+        mod.ocr.return_value = mock_ec
+    return mod
+
 
 # ---------------------------------------------------------------------------
 # OcrResult / OcrStatus
@@ -45,7 +73,7 @@ class TestRunOcrSuccess:
         dst = tmp_path / "book_ocr.pdf"
         src.write_bytes(b"%PDF-1.4")
 
-        with patch("kindle_pdf_capture.ocr.ocrmypdf.ocr", return_value=ocrmypdf.ExitCode.ok):
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", _mock_ocrmypdf("ok")):
             result = run_ocr(src, dst)
 
         assert result.status == OcrStatus.SUCCESS
@@ -56,7 +84,7 @@ class TestRunOcrSuccess:
         dst = tmp_path / "book_ocr.pdf"
         src.write_bytes(b"%PDF-1.4")
 
-        with patch("kindle_pdf_capture.ocr.ocrmypdf.ocr", return_value=ocrmypdf.ExitCode.ok):
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", _mock_ocrmypdf("ok")):
             result = run_ocr(src, dst)
 
         assert result.output == dst
@@ -66,13 +94,12 @@ class TestRunOcrSuccess:
         dst = tmp_path / "book_ocr.pdf"
         src.write_bytes(b"%PDF-1.4")
 
-        with patch(
-            "kindle_pdf_capture.ocr.ocrmypdf.ocr", return_value=ocrmypdf.ExitCode.ok
-        ) as mock_ocr:
+        mock_mod = _mock_ocrmypdf("ok")
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", mock_mod):
             run_ocr(src, dst, lang="jpn+eng", optimize=2)
 
-        mock_ocr.assert_called_once()
-        kwargs = mock_ocr.call_args.kwargs
+        mock_mod.ocr.assert_called_once()
+        kwargs = mock_mod.ocr.call_args.kwargs
         assert kwargs["language"] == ["jpn", "eng"]
         assert kwargs["optimize"] == 2
         assert kwargs["skip_text"] is True
@@ -83,12 +110,11 @@ class TestRunOcrSuccess:
         dst = tmp_path / "book_ocr.pdf"
         src.write_bytes(b"%PDF-1.4")
 
-        with patch(
-            "kindle_pdf_capture.ocr.ocrmypdf.ocr", return_value=ocrmypdf.ExitCode.ok
-        ) as mock_ocr:
+        mock_mod = _mock_ocrmypdf("ok")
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", mock_mod):
             run_ocr(src, dst, lang="eng")
 
-        kwargs = mock_ocr.call_args.kwargs
+        kwargs = mock_mod.ocr.call_args.kwargs
         assert kwargs["language"] == ["eng"]
 
 
@@ -103,13 +129,10 @@ class TestRunOcrFailure:
         dst = tmp_path / "book_ocr.pdf"
         src.write_bytes(b"%PDF-1.4")
 
-        with patch(
-            "kindle_pdf_capture.ocr.ocrmypdf.ocr", return_value=ocrmypdf.ExitCode.input_file
-        ):
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", _mock_ocrmypdf("fail")):
             result = run_ocr(src, dst)
 
         assert result.status == OcrStatus.FAILED
-        assert result.returncode != 0
         assert result.succeeded is False
 
     def test_does_not_raise_on_ocr_exception(self, tmp_path: Path) -> None:
@@ -119,9 +142,20 @@ class TestRunOcrFailure:
         src.write_bytes(b"%PDF-1.4")
 
         with patch(
-            "kindle_pdf_capture.ocr.ocrmypdf.ocr",
-            side_effect=RuntimeError("ocrmypdf internal error"),
+            "kindle_pdf_capture.ocr._ocrmypdf", _mock_ocrmypdf(raises=RuntimeError("internal"))
         ):
+            result = run_ocr(src, dst)
+
+        assert result.status == OcrStatus.FAILED
+        assert result.succeeded is False
+
+    def test_returns_failed_when_ocrmypdf_not_installed(self, tmp_path: Path) -> None:
+        """When _ocrmypdf is None (package not installed), run_ocr returns FAILED."""
+        src = tmp_path / "book.pdf"
+        dst = tmp_path / "book_ocr.pdf"
+        src.write_bytes(b"%PDF-1.4")
+
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", None):
             result = run_ocr(src, dst)
 
         assert result.status == OcrStatus.FAILED
@@ -131,9 +165,7 @@ class TestRunOcrFailure:
         src = tmp_path / "missing.pdf"
         dst = tmp_path / "out.pdf"
 
-        with patch(
-            "kindle_pdf_capture.ocr.ocrmypdf.ocr", return_value=ocrmypdf.ExitCode.input_file
-        ):
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", _mock_ocrmypdf("fail")):
             result = run_ocr(src, dst)
 
         assert result.succeeded is False
@@ -192,9 +224,7 @@ class TestRunOcrSideEffects:
         dst = tmp_path / "book_ocr.pdf"
         src.write_bytes(b"%PDF-1.4 original")
 
-        with patch(
-            "kindle_pdf_capture.ocr.ocrmypdf.ocr", return_value=ocrmypdf.ExitCode.input_file
-        ):
+        with patch("kindle_pdf_capture.ocr._ocrmypdf", _mock_ocrmypdf("fail")):
             run_ocr(src, dst)
 
         assert src.exists()

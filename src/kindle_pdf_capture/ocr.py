@@ -13,7 +13,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-import ocrmypdf
+try:
+    import ocrmypdf as _ocrmypdf
+except ImportError:  # optional dependency — only needed when --ocr is used
+    _ocrmypdf = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +83,14 @@ def run_ocr(
 
     logger.info("Running OCR: src=%s lang=%s optimize=%d", src, lang, optimize)
 
+    if _ocrmypdf is None:
+        logger.error(
+            "ocrmypdf is not installed. Install with: pip install 'kindle-pdf-capture[ocr]'"
+        )
+        return OcrResult(status=OcrStatus.FAILED, output=dst, returncode=-1)
+
     try:
-        exit_code = ocrmypdf.ocr(
+        exit_code = _ocrmypdf.ocr(
             src,
             dst,
             language=languages,
@@ -94,7 +103,7 @@ def run_ocr(
         return OcrResult(status=OcrStatus.FAILED, output=dst, returncode=-1)
 
     returncode = int(exit_code)
-    if exit_code == ocrmypdf.ExitCode.ok:
+    if exit_code == _ocrmypdf.ExitCode.ok:
         logger.info("OCR completed: %s", dst)
         return OcrResult(status=OcrStatus.SUCCESS, output=dst, returncode=returncode)
 
