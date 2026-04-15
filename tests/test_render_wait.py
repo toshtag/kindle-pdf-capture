@@ -168,6 +168,40 @@ class TestWaitForRender:
         )
         assert result.status == WaitStatus.CONVERGED
 
+    def test_last_frame_is_returned_on_convergence(self) -> None:
+        """WaitResult.last_frame must be the final captured frame on convergence."""
+        stable = _frame(200)
+        frames = [_frame(100), stable, stable]
+        result = wait_for_render(
+            capture_fn=_make_capture_fn(frames),
+            threshold=0.02,
+            timeout=5.0,
+            poll_interval=0.0,
+            stable_count=2,
+        )
+        assert result.status == WaitStatus.CONVERGED
+        assert result.last_frame is not None
+        assert np.array_equal(result.last_frame, stable)
+
+    def test_last_frame_is_returned_on_timeout(self) -> None:
+        """WaitResult.last_frame must hold the last captured frame even on timeout."""
+        captured = []
+        final = _frame(77)
+
+        def capture() -> np.ndarray:
+            f = _frame(len(captured) % 255)
+            captured.append(f)
+            return final if len(captured) > 5 else f
+
+        result = wait_for_render(
+            capture_fn=capture,
+            threshold=0.001,
+            timeout=0.1,
+            poll_interval=0.0,
+            stable_count=2,
+        )
+        assert result.last_frame is not None
+
     def test_accepts_callable_capture_fn(self) -> None:
         """capture_fn can be any callable returning a BGR ndarray."""
         call_count = 0
