@@ -184,15 +184,24 @@ def load_session(config: CaptureConfig) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
-def _frames_differ(before: np.ndarray, after: np.ndarray, threshold: float = 0.02) -> bool:
+def _frames_differ(before: np.ndarray, after: np.ndarray, threshold: float = 0.01) -> bool:
     """Return True when *before* and *after* differ enough to indicate a page turn.
 
-    Uses the same central-patch diff ratio as render_wait.compute_diff_ratio so
-    the sensitivity is consistent across the pipeline.  The default threshold of
-    0.02 (2 % of the central 200x200 patch) matches render_wait's convergence
-    threshold, meaning any change that render_wait would consider "not yet
-    stable" is also treated as a genuine page turn here.
-    """
-    from kindle_pdf_capture.render_wait import compute_diff_ratio
+    Unlike render_wait.compute_diff_ratio (which inspects only a central patch
+    to detect mid-transition jitter), this function downscales the *whole* frame
+    before comparing.  This is necessary for Japanese vertical-writing books
+    where text sits near the left/right edges and the centre is blank background
+    — a central-patch comparison would score 0 even when two distinct pages are
+    being compared.
 
-    return compute_diff_ratio(before, after) > threshold
+    Strategy: resize both frames to 64x64 grayscale, compute mean absolute
+    difference (MAD), normalise to [0, 1].  A threshold of 0.01 (1 % of max
+    pixel range) is conservative enough to survive JPEG compression artefacts
+    while catching any genuine page-content change.
+    """
+    import cv2
+
+    small_a = cv2.resize(cv2.cvtColor(before, cv2.COLOR_BGR2GRAY), (64, 64)).astype(np.float32)
+    small_b = cv2.resize(cv2.cvtColor(after, cv2.COLOR_BGR2GRAY), (64, 64)).astype(np.float32)
+    mad = float(np.abs(small_a - small_b).mean() / 255.0)
+    return mad > threshold
