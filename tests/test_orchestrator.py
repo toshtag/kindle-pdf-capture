@@ -48,6 +48,28 @@ def _sparse_text_bgr(text_rows: list[tuple[int, int, int, int]]) -> np.ndarray:
     return img
 
 
+def _vertical_text_bgr(col_positions: list[int], gray_bg: int = 200) -> np.ndarray:
+    """Gray background with vertical text columns near the edges only.
+
+    Simulates a Japanese vertical-writing Kindle page where text runs in
+    columns along the right-to-left edges and the centre is empty background.
+    The central 200x200 patch is intentionally left blank so that
+    compute_diff_ratio (central-patch only) returns 0.0 between two such pages
+    even though the pages clearly differ in their edge regions.
+
+    col_positions: list of x-coordinates (left edge of each text column).
+    gray_bg: background brightness (Kindle reading pages use ~200 gray).
+    """
+    img = np.full((900, 1200, 3), gray_bg, dtype=np.uint8)
+    cx = 1200 // 2
+    safe_margin = 150  # keep this many px away from centre so patch stays blank
+    for x in col_positions:
+        # Only draw columns that are outside the central 200x200 patch
+        if abs(x - cx) > safe_margin:
+            img[50:850, x : x + 20] = 40  # dark vertical stripe = text column
+    return img
+
+
 def _config(tmp_path: Path, **overrides) -> CaptureConfig:
     defaults = dict(
         out_dir=tmp_path / "book",
@@ -203,6 +225,33 @@ class TestCaptureSessionEndDetection:
         half_title = _sparse_text_bgr([(200, 240, 500, 800)])
         # before=title_page, after=half_title → pages differ → streak stays 0
         session.record_duplicate(title_page, half_title)
+        assert session.is_finished() is False
+
+    def test_vertical_text_pages_not_mistaken_for_duplicate(self, tmp_path: Path) -> None:
+        """Vertical-text pages with text only at left/right edges must not trigger end-of-book.
+
+        compute_diff_ratio uses a central 200x200 patch. On vertical-writing
+        Kindle pages the centre is blank gray; all text sits near the edges.
+        Two consecutive pages therefore score diff≈0 on the central patch even
+        though the pages are clearly different. _frames_differ must use a
+        whole-frame comparison to catch this case.
+
+        The test calls record_duplicate 3 times with clearly different pages.
+        If _frames_differ only inspects the central patch, streak would reach 3
+        and is_finished() would return True — wrong.  With a whole-frame diff
+        each call resets the streak to 0 and is_finished() stays False.
+        """
+        session = CaptureSession(_config(tmp_path))
+        pages = [
+            _vertical_text_bgr([1050, 1100, 1150]),  # right-edge columns
+            _vertical_text_bgr([50, 100, 150]),  # left-edge columns
+            _vertical_text_bgr([900, 950, 1000]),  # different right-edge columns
+            _vertical_text_bgr([200, 250, 300]),  # yet another distinct page
+        ]
+        for i in range(len(pages) - 1):
+            session.record_duplicate(pages[i], pages[i + 1])
+        # 3 calls (limit=3), each with genuinely different before/after —
+        # streak must reset each time so is_finished() stays False
         assert session.is_finished() is False
 
     def test_ok_result_does_not_reset_duplicate_streak(self, tmp_path: Path) -> None:
