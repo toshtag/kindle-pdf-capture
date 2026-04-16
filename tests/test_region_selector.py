@@ -212,6 +212,8 @@ class TestRegionSelectorLogic:
         selector._x0 = selector._y0 = selector._x1 = selector._y1 = 0
         selector._rect_id = None
         selector._mask_ids = []
+        selector._handle_ids = []
+        selector._dragging_handle = None
         selector._frame_w = frame_w
         selector._frame_h = frame_h
         # pts_to_px=1.0: one display point == one frame pixel
@@ -314,3 +316,117 @@ class TestRegionSelectorLogic:
 
         assert selector._cancelled is True
         assert selector._result is None
+
+    # ------------------------------------------------------------------
+    # Handle-based resize tests
+    # ------------------------------------------------------------------
+
+    def test_handle_positions_returns_eight_handles(self):
+        """_handle_positions must return exactly 8 entries."""
+        selector = self._init_selector(1200, 900)
+        pos = selector._handle_positions(100, 200, 500, 600)
+        assert set(pos.keys()) == {"TL", "TM", "TR", "ML", "MR", "BL", "BM", "BR"}
+
+    def test_handle_positions_corners(self):
+        """Corner handles must sit at the rectangle corners."""
+        selector = self._init_selector(1200, 900)
+        pos = selector._handle_positions(100, 200, 500, 600)
+        assert pos["TL"] == (100, 200)
+        assert pos["TR"] == (500, 200)
+        assert pos["BL"] == (100, 600)
+        assert pos["BR"] == (500, 600)
+
+    def test_handle_positions_midpoints(self):
+        """Edge-midpoint handles must sit at the midpoints of their respective edges."""
+        selector = self._init_selector(1200, 900)
+        pos = selector._handle_positions(100, 200, 500, 600)
+        assert pos["TM"] == (300, 200)  # midx = (100+500)//2
+        assert pos["BM"] == (300, 600)
+        assert pos["ML"] == (100, 400)  # midy = (200+600)//2
+        assert pos["MR"] == (500, 400)
+
+    def test_hit_handle_returns_none_when_no_rect(self):
+        """_hit_handle must return None when no rectangle has been drawn."""
+        selector = self._init_selector(1200, 900)
+        # Default x0==x1==y0==y1==0 → zero-size, no hit
+        assert selector._hit_handle(0, 0) is None
+
+    def test_hit_handle_detects_corner(self):
+        """A click on the BR corner must return 'BR'."""
+        from kindle_pdf_capture.region_selector import _INSTR_BAR_H
+
+        selector = self._init_selector(1200, 900)
+        selector._x0, selector._y0 = 100, _INSTR_BAR_H + 200
+        selector._x1, selector._y1 = 500, _INSTR_BAR_H + 600
+        assert selector._hit_handle(500, _INSTR_BAR_H + 600) == "BR"
+
+    def test_handle_drag_moves_right_edge(self):
+        """Dragging the MR handle must move only the right edge."""
+        from unittest.mock import MagicMock
+
+        from kindle_pdf_capture.region_selector import _INSTR_BAR_H
+
+        selector = self._init_selector(1200, 900)
+        iy = _INSTR_BAR_H
+        selector._x0, selector._y0 = 100, iy + 200
+        selector._x1, selector._y1 = 500, iy + 600
+
+        # Press on MR handle
+        press = MagicMock()
+        press.x, press.y = 500, iy + 400  # MR position
+        selector._on_press(press)
+        assert selector._dragging_handle == "MR"
+
+        # Drag to x=700
+        drag = MagicMock()
+        drag.x, drag.y = 700, iy + 400
+        selector._on_drag(drag)
+
+        # Right edge moved to 700, left/top/bottom unchanged
+        assert selector._x1 == 700
+        assert selector._x0 == 100
+        assert selector._y0 == iy + 200
+        assert selector._y1 == iy + 600
+
+    def test_handle_drag_moves_top_edge(self):
+        """Dragging the TM handle must move only the top edge."""
+        from unittest.mock import MagicMock
+
+        from kindle_pdf_capture.region_selector import _INSTR_BAR_H
+
+        selector = self._init_selector(1200, 900)
+        iy = _INSTR_BAR_H
+        selector._x0, selector._y0 = 100, iy + 200
+        selector._x1, selector._y1 = 500, iy + 600
+
+        press = MagicMock()
+        press.x, press.y = 300, iy + 200  # TM position
+        selector._on_press(press)
+        assert selector._dragging_handle == "TM"
+
+        drag = MagicMock()
+        drag.x, drag.y = 300, iy + 100  # move top up
+        selector._on_drag(drag)
+
+        assert selector._y0 == iy + 100
+        assert selector._y1 == iy + 600  # bottom unchanged
+        assert selector._x0 == 100
+        assert selector._x1 == 500
+
+    def test_new_drag_clears_handle_state(self):
+        """Starting a new drag outside handles must reset dragging_handle."""
+        from unittest.mock import MagicMock
+
+        from kindle_pdf_capture.region_selector import _INSTR_BAR_H
+
+        selector = self._init_selector(1200, 900)
+        iy = _INSTR_BAR_H
+        selector._x0, selector._y0 = 100, iy + 200
+        selector._x1, selector._y1 = 500, iy + 600
+
+        # Click somewhere far from any handle
+        press = MagicMock()
+        press.x, press.y = 50, iy + 50
+        selector._on_press(press)
+
+        assert selector._dragging_handle is None
