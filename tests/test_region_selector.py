@@ -12,8 +12,10 @@ import numpy as np
 import pytest
 
 from kindle_pdf_capture.region_selector import (
+    _INSTR_BAR_H,
     RegionSelectorCancelled,
     _clamp,
+    _compute_display_size,
     _normalise_rect,
     _rect_to_content_region,
 )
@@ -93,6 +95,74 @@ class TestRectToContentRegion:
         region = _rect_to_content_region(50, 50, 51, 51)
         assert region.w == 1
         assert region.h == 1
+
+
+# ---------------------------------------------------------------------------
+# _compute_display_size — window sizing logic
+# ---------------------------------------------------------------------------
+
+
+class TestComputeDisplaySize:
+    """Tests for the pure display-size computation helper.
+
+    This class verifies the sizing logic that determines how large the
+    selector window appears on screen — the bug that previously caused the
+    window to appear as a tiny ~65pt square.
+    """
+
+    def test_no_upscaling_when_frame_fits(self):
+        """Frame smaller than screen must not be upscaled (scale <= 1)."""
+        # frame 800x600, screen 2240x1260 → frame fits, scale=1.0
+        disp_w, disp_h, pts_to_px = _compute_display_size(800, 600, 2240, 1260)
+        assert disp_w == 800
+        assert disp_h == 600
+        assert pts_to_px == pytest.approx(1.0)
+
+    def test_frame_larger_than_screen_is_scaled_down(self):
+        """Frame wider than usable screen area must be downscaled."""
+        # frame 2880x1800, screen 2240x1260
+        # usable_h = 1260 - 25 - 60 = 1175
+        # scale = min(2240/2880, 1175/1800) = min(0.778, 0.653) = 0.653
+        disp_w, disp_h, _pts = _compute_display_size(2880, 1800, 2240, 1260)
+        expected_scale = min(2240 / 2880, (1260 - 25 - _INSTR_BAR_H) / 1800)
+        assert disp_w == max(1, int(2880 * expected_scale))
+        assert disp_h == max(1, int(1800 * expected_scale))
+        assert disp_w < 2880  # must be smaller than frame
+        assert disp_h < 1800
+
+    def test_pts_to_px_is_inverse_of_scale(self):
+        """pts_to_px must equal frame_w / disp_w."""
+        disp_w, _disp_h, pts_to_px = _compute_display_size(2400, 1500, 2240, 1260)
+        assert pts_to_px == pytest.approx(2400 / disp_w)
+
+    def test_display_occupies_most_of_screen(self):
+        """A large frame should fill at least 60% of the usable screen width."""
+        # Typical Retina Kindle: frame ~2880x1800, screen 2240x1260
+        disp_w, _disp_h, _pts = _compute_display_size(2880, 1800, 2240, 1260)
+        usable_w = 2240
+        assert disp_w >= usable_w * 0.6, (
+            f"Window too small: disp_w={disp_w} is less than 60% of screen ({usable_w})"
+        )
+
+    def test_minimum_size_one_pixel(self):
+        """A 1x1 frame must not produce zero-size display."""
+        disp_w, disp_h, _pts = _compute_display_size(1, 1, 2240, 1260)
+        assert disp_w >= 1
+        assert disp_h >= 1
+
+    def test_width_constrained_landscape_frame(self):
+        """Very wide frame: width constraint must dominate."""
+        # frame 4000x100, screen 2240x1260
+        # usable_w=2240 → scale limited by width: 2240/4000=0.56
+        disp_w, _disp_h, _pts = _compute_display_size(4000, 100, 2240, 1260)
+        assert disp_w <= 2240
+
+    def test_height_constrained_portrait_frame(self):
+        """Very tall frame: height constraint must dominate."""
+        # frame 100x3000, screen 2240x1260
+        # usable_h = 1260-25-60=1175 → scale limited by height: 1175/3000=0.392
+        _disp_w, disp_h, _pts = _compute_display_size(100, 3000, 2240, 1260)
+        assert disp_h <= 1260 - 25 - _INSTR_BAR_H
 
 
 # ---------------------------------------------------------------------------
