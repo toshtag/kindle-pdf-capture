@@ -35,6 +35,19 @@ def _content_bgr() -> np.ndarray:
     return img
 
 
+def _sparse_text_bgr(text_rows: list[tuple[int, int, int, int]]) -> np.ndarray:
+    """White background with thin horizontal text-like stripes at specified rows.
+
+    Each tuple is (y0, y1, x0, x1) defining a text block region filled with dark pixels.
+    Simulates sparse-text pages (title page, half-title, etc.) that differ only
+    slightly — the kind that fooled the old 16x16 hash-based detector.
+    """
+    img = _white_bgr()
+    for y0, y1, x0, x1 in text_rows:
+        img[y0:y1, x0:x1] = 40
+    return img
+
+
 def _config(tmp_path: Path, **overrides) -> CaptureConfig:
     defaults = dict(
         out_dir=tmp_path / "book",
@@ -147,52 +160,62 @@ class TestCaptureSessionEndDetection:
         session.record_result(PageResult(3, PageStatus.OK, None))
         assert session.is_finished() is True
 
-    def test_finished_after_consecutive_duplicates(self, tmp_path: Path) -> None:
+    def test_finished_after_consecutive_no_change(self, tmp_path: Path) -> None:
+        """Streak reaches limit when before==after for 3 consecutive turns."""
         session = CaptureSession(_config(tmp_path))
         img = _white_bgr()
         for _ in range(3):
-            session.record_duplicate(img)
+            session.record_duplicate(img, img)
         assert session.is_finished() is True
 
-    def test_not_finished_after_few_duplicates(self, tmp_path: Path) -> None:
+    def test_not_finished_after_few_no_change(self, tmp_path: Path) -> None:
         session = CaptureSession(_config(tmp_path))
         img = _white_bgr()
-        session.record_duplicate(img)
-        session.record_duplicate(img)
+        session.record_duplicate(img, img)
+        session.record_duplicate(img, img)
         assert session.is_finished() is False
 
-    def test_duplicate_streak_resets_on_new_image(self, tmp_path: Path) -> None:
+    def test_streak_resets_when_page_changes(self, tmp_path: Path) -> None:
+        """Streak resets to 0 when before and after differ (page actually turned)."""
         session = CaptureSession(_config(tmp_path))
-        img_a = _white_bgr()
-        img_b = _content_bgr()
-        session.record_duplicate(img_a)
-        session.record_duplicate(img_a)
-        session.record_duplicate(img_b)  # different image resets streak via record_duplicate
+        img_same = _white_bgr()
+        img_new = _content_bgr()
+        session.record_duplicate(img_same, img_same)
+        session.record_duplicate(img_same, img_same)
+        # page turned — before != after
+        session.record_duplicate(img_same, img_new)
+        assert session.is_finished() is False
+
+    def test_sparse_text_pages_not_mistaken_for_duplicate(self, tmp_path: Path) -> None:
+        """Two visually similar but distinct sparse-text pages must reset the streak.
+
+        This is the scenario that broke the old 16x16 hash: a title page and a
+        half-title page both have white backgrounds with only a few characters.
+        With the before/after approach the comparison is between the captured
+        frame *before* the key press and the stable frame *after* — so as long
+        as the render_wait returns a genuinely new frame the streak resets.
+        """
+        session = CaptureSession(_config(tmp_path))
+        # Simulate title page (before) → half-title page (after)
+        title_page = _sparse_text_bgr(
+            [(300, 340, 500, 800), (400, 430, 500, 650), (550, 580, 500, 600)]
+        )
+        half_title = _sparse_text_bgr([(200, 240, 500, 800)])
+        # before=title_page, after=half_title → pages differ → streak stays 0
+        session.record_duplicate(title_page, half_title)
         assert session.is_finished() is False
 
     def test_ok_result_does_not_reset_duplicate_streak(self, tmp_path: Path) -> None:
-        """record_result(OK) must NOT reset the duplicate streak.
-
-        In the capture loop the sequence is:
-          record_result(OK) → send key → wait → next_frame → record_duplicate
-
-        If record_result resets the streak, consecutive same-frame detections
-        after a failed key press can never accumulate to the limit, so the
-        loop runs forever (until max_pages).
-        """
+        """record_result(OK) must NOT reset the duplicate streak."""
         session = CaptureSession(_config(tmp_path))
         img = _white_bgr()
 
-        # Two consecutive duplicate detections
-        session.record_duplicate(img)
-        session.record_duplicate(img)
-        # streak is now 2
+        session.record_duplicate(img, img)
+        session.record_duplicate(img, img)
 
-        # Saving a page result must NOT reset the streak back to 0
         session.record_result(PageResult(1, PageStatus.OK, None))
 
-        # Third duplicate — must reach the limit (3) and trigger is_finished
-        session.record_duplicate(img)
+        session.record_duplicate(img, img)
         assert session.is_finished() is True, (
             "Duplicate streak should have reached 3; record_result(OK) must not reset it."
         )
