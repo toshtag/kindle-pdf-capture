@@ -39,6 +39,18 @@ The capture is running before the page has finished rendering.
   or DRM decryption may exceed the default 8-second timeout. This is logged as
   a warning.
 
+## Content-region detection fails on all-white covers
+
+Books whose cover page is entirely white have no visible contours, so the
+auto-detection step cannot infer the correct window size.
+
+- Run with `--manual-crop`. A full-screen overlay appears showing the Kindle
+  window screenshot. Drag a rectangle over the cover area, use the 8 handles
+  (corners + edge midpoints) to fine-tune, then press **Enter** to confirm.
+  Press **Esc** or close the window to abort.
+- After confirmation `kpc` resizes the window to match your selection and
+  proceeds with the normal pipeline for all subsequent pages.
+
 ## PDF has wrong page order
 
 Pages are assembled from `cropped/page_XXXX.jpg` in alphabetical order.
