@@ -57,6 +57,31 @@ def _rect_to_content_region(x0: int, y0: int, x1: int, y1: int) -> ContentRegion
 
 
 # ---------------------------------------------------------------------------
+# Screen geometry helper
+# ---------------------------------------------------------------------------
+
+
+def _get_screen_info() -> tuple[float, float, float]:
+    """Return (width_pts, height_pts, backing_scale) for the main screen.
+
+    Uses AppKit.NSScreen so the values are correct on Retina / HiDPI Macs
+    regardless of the display's logical vs. physical resolution.
+
+    Falls back to a safe default (2560x1600, scale=2.0) if AppKit is not
+    available (e.g. during tests on non-macOS).
+    """
+    try:
+        from AppKit import NSScreen  # type: ignore[import]
+
+        screen = NSScreen.mainScreen()
+        frame = screen.frame()
+        scale = screen.backingScaleFactor()
+        return float(frame.size.width), float(frame.size.height), float(scale)
+    except Exception:
+        return 2560.0, 1600.0, 2.0
+
+
+# ---------------------------------------------------------------------------
 # Visual constants
 # ---------------------------------------------------------------------------
 
@@ -102,29 +127,47 @@ class RegionSelector:
         self._root = tk.Tk()
         self._root.title(title)
         self._root.resizable(False, False)
-        self._root.attributes("-topmost", True)
 
-        # --- Determine display scale so the image fits the screen ---
-        screen_w = self._root.winfo_screenwidth()
-        screen_h = self._root.winfo_screenheight()
-        # Reserve space for macOS menu bar (~25 px) + instruction bar
-        usable_h = screen_h - 25 - _INSTR_BAR_H
-        scale = min(screen_w / self._frame_w, usable_h / self._frame_h, 1.0)
-        self._scale = scale
-        self._disp_w = max(1, int(self._frame_w * scale))
-        self._disp_h = max(1, int(self._frame_h * scale))
+        # --- Determine display scale ---
+        # Use NSScreen to get the main screen's logical point dimensions and
+        # backing scale factor.  This is reliable on Retina / HiDPI Macs where
+        # winfo_screenwidth() returns logical points but `frame` is in physical
+        # pixels (scale_factor = 2.0 on Retina).
+        screen_pts_w, screen_pts_h, backing_scale = _get_screen_info()
+        # frame pixels → logical screen points
+        frame_pts_w = self._frame_w / backing_scale
+        frame_pts_h = self._frame_h / backing_scale
+        # Reserve macOS menu bar (~25 pts) + instruction bar
+        usable_pts_h = screen_pts_h - 25 - _INSTR_BAR_H
+        # Scale factor to make the image fit in logical points, capped at 1.0
+        # so we never upscale a small frame.
+        fit_scale = min(screen_pts_w / frame_pts_w, usable_pts_h / frame_pts_h, 1.0)
+        self._scale = fit_scale * backing_scale  # maps display px → frame px
+        # Display dimensions in logical points (what tkinter uses for geometry)
+        disp_pts_w = max(1, int(frame_pts_w * fit_scale))
+        disp_pts_h = max(1, int(frame_pts_h * fit_scale))
+        # Display dimensions in pixels (what PIL resize needs)
+        self._disp_w = max(1, int(self._frame_w * fit_scale))
+        self._disp_h = max(1, int(self._frame_h * fit_scale))
 
         # --- Scale the image for display ---
         from PIL import Image, ImageTk
 
         rgb = frame[:, :, ::-1].copy()
         pil_img = Image.fromarray(rgb)
-        if scale < 1.0:
+        if fit_scale < 1.0:
             pil_img = pil_img.resize(
                 (self._disp_w, self._disp_h),
                 Image.LANCZOS,  # type: ignore[attr-defined]
             )
         self._photo = ImageTk.PhotoImage(pil_img)
+
+        # Position window at top-left of screen, then bring to front
+        total_pts_h = _INSTR_BAR_H + disp_pts_h
+        self._root.geometry(f"{disp_pts_w}x{total_pts_h}+0+0")
+        self._root.attributes("-topmost", True)
+        self._root.lift()
+        self._root.focus_force()
 
         # Total canvas height: instruction bar + image
         total_h = _INSTR_BAR_H + self._disp_h
@@ -286,12 +329,14 @@ class RegionSelector:
             if hasattr(self, "_root"):
                 self._root.quit()
             return
-        # Convert display coordinates back to frame pixel coordinates
+        # Convert display pixel coordinates → frame pixel coordinates.
+        # self._scale = fit_scale * backing_scale,
+        # so frame_px = display_px * self._scale.
         iy = self._img_y0
-        fx0 = round((left) / self._scale)
-        fy0 = round((top - iy) / self._scale)
-        fx1 = round((right) / self._scale)
-        fy1 = round((bottom - iy) / self._scale)
+        fx0 = round(left * self._scale)
+        fy0 = round((top - iy) * self._scale)
+        fx1 = round(right * self._scale)
+        fy1 = round((bottom - iy) * self._scale)
         # Clamp to frame bounds
         fx0 = _clamp(fx0, 0, self._frame_w)
         fy0 = _clamp(fy0, 0, self._frame_h)
