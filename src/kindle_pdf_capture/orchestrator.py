@@ -184,24 +184,45 @@ def load_session(config: CaptureConfig) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
-def _frames_differ(before: np.ndarray, after: np.ndarray, threshold: float = 0.01) -> bool:
+def _frames_differ(
+    before: np.ndarray,
+    after: np.ndarray,
+    *,
+    pixel_threshold: int = 10,
+    ratio_threshold: float = 0.001,
+) -> bool:
     """Return True when *before* and *after* differ enough to indicate a page turn.
 
-    Unlike render_wait.compute_diff_ratio (which inspects only a central patch
-    to detect mid-transition jitter), this function downscales the *whole* frame
-    before comparing.  This is necessary for Japanese vertical-writing books
-    where text sits near the left/right edges and the centre is blank background
-    — a central-patch comparison would score 0 even when two distinct pages are
-    being compared.
+    Strategy: downscale both frames to 256x256 grayscale, then count the
+    fraction of pixels whose absolute difference exceeds *pixel_threshold*.
+    If that fraction exceeds *ratio_threshold* the frames are considered
+    different (page turned).
 
-    Strategy: resize both frames to 64x64 grayscale, compute mean absolute
-    difference (MAD), normalise to [0, 1].  A threshold of 0.01 (1 % of max
-    pixel range) is conservative enough to survive JPEG compression artefacts
-    while catching any genuine page-content change.
+    Why not MAD (mean absolute difference)?
+    ----------------------------------------
+    Sparse-text pages (title page, half-title, credits) have a nearly uniform
+    background.  Two consecutive such pages may differ in only ~0.5% of pixels,
+    making the MAD vanishingly small even though the pages are clearly distinct.
+    Counting *changed pixels* instead of averaging their magnitude correctly
+    handles this case: even 0.1% changed pixels is a clear page-turn signal.
+
+    Real-world calibration (夢をかなえるゾウ1, raw_0002 vs raw_0003):
+      changed pixels (>10px):  0.44% of total frame
+      MAD at 64x64:            0.00137  — falsely "same" with MAD approach
+      changed ratio at 256x256: ≈0.0015 — correctly "differ" with this approach
+
+    Parameters
+    ----------
+    pixel_threshold: Minimum per-pixel absolute difference to count as changed.
+                     10 out of 255 filters JPEG compression noise (~4%).
+    ratio_threshold: Minimum fraction of changed pixels to consider the frames
+                     different.  0.001 (0.1%) is well above JPEG noise floors
+                     and well below the 0.44% seen on the hardest real pages.
     """
     import cv2
 
-    small_a = cv2.resize(cv2.cvtColor(before, cv2.COLOR_BGR2GRAY), (64, 64)).astype(np.float32)
-    small_b = cv2.resize(cv2.cvtColor(after, cv2.COLOR_BGR2GRAY), (64, 64)).astype(np.float32)
-    mad = float(np.abs(small_a - small_b).mean() / 255.0)
-    return mad > threshold
+    gray_a = cv2.resize(cv2.cvtColor(before, cv2.COLOR_BGR2GRAY), (256, 256)).astype(np.float32)
+    gray_b = cv2.resize(cv2.cvtColor(after, cv2.COLOR_BGR2GRAY), (256, 256)).astype(np.float32)
+    diff = np.abs(gray_a - gray_b)
+    changed_ratio = float(np.sum(diff > pixel_threshold) / diff.size)
+    return changed_ratio > ratio_threshold
