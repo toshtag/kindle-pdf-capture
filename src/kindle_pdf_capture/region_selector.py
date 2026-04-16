@@ -35,6 +35,7 @@ Pure-logic helpers (also exported for testing)
 from __future__ import annotations
 
 import tkinter as tk
+from typing import ClassVar
 
 import numpy as np
 
@@ -96,13 +97,19 @@ def _get_screen_pts() -> tuple[int, int]:
 
 _RECT_COLOUR = "#00d4ff"  # bright cyan selection box
 _RECT_WIDTH = 3
+_HANDLE_COLOUR = "#ffffff"  # white resize handles
+_HANDLE_SIZE = 8  # half-width of handle square in logical points
 _MASK_COLOUR = "#000000"  # dark overlay outside selection
 _MASK_STIPPLE = "gray50"  # ~50% opacity via tkinter stipple
 _FONT_FAMILY = "Helvetica"
 _FONT_SIZE = 15
-_INSTRUCTIONS_EN = "Drag to select the book area  |  Enter: confirm  |  Esc: cancel"
-_INSTRUCTIONS_JA = "本のページ領域をドラッグ選択  |  Enter で確定  |  Esc でキャンセル"
+_INSTRUCTIONS_EN = "Drag to select  |  Drag handles to adjust  |  Enter: confirm  |  Esc: cancel"
+_INSTRUCTIONS_JA = "ドラッグで選択  |  ハンドルで微調整  |  Enter で確定  |  Esc でキャンセル"
 _INSTR_BAR_H = 60  # logical points reserved for instruction bar at top
+
+# Handle identifiers — index into the 8-handle array.
+# Layout: TL=0 TM=1 TR=2 ML=3 MR=4 BL=5 BM=6 BR=7
+_HANDLES = ("TL", "TM", "TR", "ML", "MR", "BL", "BM", "BR")
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +160,8 @@ class RegionSelector:
         self._x0 = self._y0 = self._x1 = self._y1 = 0
         self._rect_id: int | None = None
         self._mask_ids: list[int] = []
+        self._handle_ids: list[int] = []
+        self._dragging_handle: str | None = None  # active handle tag, e.g. "TL"
         self._result: ContentRegion | None = None
         self._cancelled = False
 
@@ -256,6 +265,8 @@ class RegionSelector:
         # Bindings
         self._canvas.bind("<ButtonPress-1>", self._on_press)
         self._canvas.bind("<B1-Motion>", self._on_drag)
+        self._canvas.bind("<ButtonRelease-1>", self._on_release)
+        self._canvas.bind("<Motion>", self._on_motion)
         self._root.bind("<Return>", self._on_confirm)
         self._root.bind("<KP_Enter>", self._on_confirm)
         self._root.bind("<Escape>", self._on_cancel)
@@ -304,24 +315,68 @@ class RegionSelector:
         _mask(right, top, iw, bottom)  # right of selection
 
     # ------------------------------------------------------------------
-    # Event handlers
+    # Handle helpers
     # ------------------------------------------------------------------
 
-    def _on_press(self, event: object) -> None:
-        self._x0 = self._cx(event.x)  # type: ignore[attr-defined]
-        self._y0 = self._cy(event.y)  # type: ignore[attr-defined]
-        self._x1 = self._x0
-        self._y1 = self._y0
-        if self._rect_id is not None:
-            self._canvas.delete(self._rect_id)
-            self._rect_id = None
-        for mid in self._mask_ids:
-            self._canvas.delete(mid)
-        self._mask_ids = []
+    def _handle_positions(
+        self, left: int, top: int, right: int, bottom: int
+    ) -> dict[str, tuple[int, int]]:
+        """Return {tag: (cx, cy)} for each of the 8 resize handles."""
+        mx = (left + right) // 2
+        my = (top + bottom) // 2
+        return {
+            "TL": (left, top),
+            "TM": (mx, top),
+            "TR": (right, top),
+            "ML": (left, my),
+            "MR": (right, my),
+            "BL": (left, bottom),
+            "BM": (mx, bottom),
+            "BR": (right, bottom),
+        }
 
-    def _on_drag(self, event: object) -> None:
-        self._x1 = self._cx(event.x)  # type: ignore[attr-defined]
-        self._y1 = self._cy(event.y)  # type: ignore[attr-defined]
+    def _redraw_handles(self, left: int, top: int, right: int, bottom: int) -> None:
+        for hid in self._handle_ids:
+            self._canvas.delete(hid)
+        self._handle_ids = []
+        s = _HANDLE_SIZE
+        for _tag, (cx, cy) in self._handle_positions(left, top, right, bottom).items():
+            self._handle_ids.append(
+                self._canvas.create_rectangle(
+                    cx - s,
+                    cy - s,
+                    cx + s,
+                    cy + s,
+                    fill=_HANDLE_COLOUR,
+                    outline=_RECT_COLOUR,
+                    width=2,
+                )
+            )
+
+    def _hit_handle(self, x: int, y: int) -> str | None:
+        """Return the tag of the handle under (x, y), or None."""
+        left, top, right, bottom = _normalise_rect(self._x0, self._y0, self._x1, self._y1)
+        if right - left < 2 or bottom - top < 2:
+            return None
+        s = _HANDLE_SIZE + 2  # slightly larger hit area
+        for tag, (cx, cy) in self._handle_positions(left, top, right, bottom).items():
+            if abs(x - cx) <= s and abs(y - cy) <= s:
+                return tag
+        return None
+
+    _HANDLE_CURSOR: ClassVar[dict[str, str]] = {
+        "TL": "top_left_corner",
+        "TR": "top_right_corner",
+        "BL": "bottom_left_corner",
+        "BR": "bottom_right_corner",
+        "TM": "top_side",
+        "BM": "bottom_side",
+        "ML": "left_side",
+        "MR": "right_side",
+    }
+
+    def _redraw_selection(self) -> None:
+        """Redraw overlay, selection rectangle, and handles from current coords."""
         left, top, right, bottom = _normalise_rect(self._x0, self._y0, self._x1, self._y1)
         self._redraw_overlay(left, top, right, bottom)
         if self._rect_id is not None:
@@ -334,6 +389,89 @@ class RegionSelector:
             outline=_RECT_COLOUR,
             width=_RECT_WIDTH,
         )
+        self._redraw_handles(left, top, right, bottom)
+
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
+
+    def _on_press(self, event: object) -> None:
+        x = event.x  # type: ignore[attr-defined]
+        y = event.y  # type: ignore[attr-defined]
+
+        # Check if the press lands on an existing handle.
+        handle = self._hit_handle(x, y)
+        if handle is not None:
+            self._dragging_handle = handle
+            return
+
+        # Otherwise start a new drag selection, clearing the old one.
+        self._dragging_handle = None
+        self._x0 = self._cx(x)
+        self._y0 = self._cy(y)
+        self._x1 = self._x0
+        self._y1 = self._y0
+        if self._rect_id is not None:
+            self._canvas.delete(self._rect_id)
+            self._rect_id = None
+        for mid in self._mask_ids:
+            self._canvas.delete(mid)
+        self._mask_ids = []
+        for hid in self._handle_ids:
+            self._canvas.delete(hid)
+        self._handle_ids = []
+
+    def _on_drag(self, event: object) -> None:
+        x = event.x  # type: ignore[attr-defined]
+        y = event.y  # type: ignore[attr-defined]
+
+        if self._dragging_handle is not None:
+            # Move the edge or corner associated with the active handle.
+            cx = self._cx(x)
+            cy = self._cy(y)
+            h = self._dragging_handle
+            left, top, right, bottom = _normalise_rect(self._x0, self._y0, self._x1, self._y1)
+            if "L" in h:
+                left = _clamp(cx, 0, right - 1)
+            if "R" in h:
+                right = _clamp(cx, left + 1, self._disp_w)
+            if h[0] == "T":
+                top = _clamp(cy, self._img_y0, bottom - 1)
+            if h[0] == "B":
+                bottom = _clamp(cy, top + 1, self._img_y0 + self._disp_h)
+            if h == "TM":
+                top = _clamp(cy, self._img_y0, bottom - 1)
+            if h == "BM":
+                bottom = _clamp(cy, top + 1, self._img_y0 + self._disp_h)
+            if h == "ML":
+                left = _clamp(cx, 0, right - 1)
+            if h == "MR":
+                right = _clamp(cx, left + 1, self._disp_w)
+            # Store back in normalised form so _normalise_rect is always idempotent.
+            self._x0, self._y0, self._x1, self._y1 = left, top, right, bottom
+            self._redraw_selection()
+            return
+
+        self._x1 = self._cx(x)
+        self._y1 = self._cy(y)
+        self._redraw_selection()
+
+    def _on_release(self, _event: object) -> None:
+        """Finish a drag — draw handles if a valid rectangle exists."""
+        self._dragging_handle = None
+        left, top, right, bottom = _normalise_rect(self._x0, self._y0, self._x1, self._y1)
+        if right - left >= 2 and bottom - top >= 2:
+            self._redraw_handles(left, top, right, bottom)
+
+    def _on_motion(self, event: object) -> None:
+        """Update cursor based on whether the pointer is over a handle."""
+        x = event.x  # type: ignore[attr-defined]
+        y = event.y  # type: ignore[attr-defined]
+        handle = self._hit_handle(x, y)
+        if handle is not None:
+            self._canvas.configure(cursor=self._HANDLE_CURSOR.get(handle, "fleur"))
+        else:
+            self._canvas.configure(cursor="crosshair")
 
     def _on_confirm(self, _event: object) -> None:
         left, top, right, bottom = _normalise_rect(self._x0, self._y0, self._x1, self._y1)
