@@ -159,7 +159,6 @@ class RegionSelector:
         # --- Tk root ---
         self._root = tk.Tk()
         self._root.title(title)
-        self._root.resizable(False, False)
 
         # --- Compute display size in logical points ---
         screen_w, screen_h = _get_screen_pts()
@@ -179,13 +178,12 @@ class RegionSelector:
         total_h = _INSTR_BAR_H + self._disp_h
         self._img_y0 = _INSTR_BAR_H  # y offset of image top edge in canvas points
 
-        # --- Size and position the window ---
-        self._root.geometry(f"{self._disp_w}x{total_h}+0+0")
-        self._root.attributes("-topmost", True)
-        self._root.lift()
-        self._root.focus_force()
-
-        # --- Canvas ---
+        # --- Canvas (must be created before geometry call) ---
+        # tkinter derives the window size from the canvas width/height.
+        # Calling geometry(WxH+X+Y) *before* the canvas is packed causes
+        # the WxH part to be overridden to 200x200 after the canvas is added.
+        # Solution: let the canvas dimensions drive the window size; only
+        # supply the position via geometry("+X+Y") after update_idletasks().
         self._canvas = tk.Canvas(
             self._root,
             width=self._disp_w,
@@ -195,6 +193,15 @@ class RegionSelector:
             bg="#1a1a1a",
         )
         self._canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Flush pending geometry requests so the canvas size is committed,
+        # then position the window at the top-left corner of the screen.
+        self._root.update_idletasks()
+        self._root.geometry("+0+0")
+        self._root.resizable(False, False)
+        self._root.attributes("-topmost", True)
+        self._root.lift()
+        self._root.focus_force()
 
         # Instruction bar background
         self._canvas.create_rectangle(
