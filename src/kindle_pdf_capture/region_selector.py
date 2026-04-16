@@ -535,9 +535,38 @@ class RegionSelector:
 # Module-level convenience function
 # ---------------------------------------------------------------------------
 
+_SUBPROCESS_SCRIPT = """\
+import sys, json, os
+import numpy as np
+
+# Reconstruct frame from the temp file path passed as argv[1]
+frame = np.load(sys.argv[1])
+
+os.environ.setdefault(
+    "TCL_LIBRARY",
+    os.path.join(
+        os.path.dirname(sys.executable),
+        "..", "lib", "tcl8.6",
+    ),
+)
+
+from kindle_pdf_capture.region_selector import RegionSelector, RegionSelectorCancelled
+
+try:
+    result = RegionSelector(frame).run()
+    print(json.dumps({"x": result.x, "y": result.y, "w": result.w, "h": result.h}))
+    sys.exit(0)
+except RegionSelectorCancelled:
+    sys.exit(2)
+"""
+
 
 def select_region(frame: np.ndarray) -> ContentRegion:
-    """Show the drag-select UI and return the chosen ContentRegion.
+    """Show the drag-select UI in a child process and return the chosen ContentRegion.
+
+    Running tkinter in a subprocess ensures the window is fully removed from
+    the screen the moment the child process exits — regardless of macOS
+    RunLoop timing in the parent.
 
     Parameters
     ----------
@@ -554,4 +583,33 @@ def select_region(frame: np.ndarray) -> ContentRegion:
     RegionSelectorCancelled
         If the user cancelled without confirming a selection.
     """
-    return RegionSelector(frame).run()
+    import json
+    import subprocess
+    import sys
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".npy", delete=False) as f:
+        tmp_path = f.name
+
+    try:
+        np.save(tmp_path, frame)
+        result = subprocess.run(
+            [sys.executable, "-c", _SUBPROCESS_SCRIPT, tmp_path],
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        import os
+
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+
+    if result.returncode == 2:
+        raise RegionSelectorCancelled("User cancelled region selection.")
+    if result.returncode != 0:
+        raise RegionSelectorCancelled(
+            f"Region selector process failed (rc={result.returncode}): {result.stderr}"
+        )
+
+    data = json.loads(result.stdout.strip())
+    return ContentRegion(x=data["x"], y=data["y"], w=data["w"], h=data["h"])
