@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+
 from kindle_pdf_capture.region_selector import (
     RegionSelectorCancelled,
     _clamp,
@@ -125,55 +126,64 @@ class TestRegionSelectorLogic:
         frame[100:200, 100:300] = 50
         return frame
 
+    def _init_selector(self, frame_w: int = 1200, frame_h: int = 900):
+        """Create a RegionSelector via __new__ with all required attributes set.
+
+        Uses scale=1.0 (no downscaling) and _img_y0=_INSTR_BAR_H so that
+        display coords equal frame coords minus the instruction bar offset.
+        """
+        from unittest.mock import MagicMock
+
+        from kindle_pdf_capture.region_selector import _INSTR_BAR_H, RegionSelector
+
+        selector = RegionSelector.__new__(RegionSelector)
+        selector._result = None
+        selector._cancelled = False
+        selector._x0 = selector._y0 = selector._x1 = selector._y1 = 0
+        selector._rect_id = None
+        selector._mask_ids = []
+        selector._frame_w = frame_w
+        selector._frame_h = frame_h
+        # scale=1.0: display pixels == frame pixels
+        selector._scale = 1.0
+        selector._disp_w = frame_w
+        selector._disp_h = frame_h
+        selector._img_y0 = _INSTR_BAR_H
+        selector._canvas = MagicMock()
+        return selector
+
     def test_select_region_returns_content_region(self, monkeypatch):
         """Simulating a complete drag must return a ContentRegion."""
-        from unittest.mock import MagicMock, patch
-
-        from kindle_pdf_capture.region_selector import RegionSelector
+        from unittest.mock import MagicMock
 
         from kindle_pdf_capture.cropper import ContentRegion
+        from kindle_pdf_capture.region_selector import _INSTR_BAR_H
 
         frame = self._make_frame()
+        selector = self._init_selector(frame.shape[1], frame.shape[0])
 
-        with patch("kindle_pdf_capture.region_selector.tk") as mock_tk:
-            # Set up mock Tk root and canvas
-            mock_root = MagicMock()
-            mock_canvas = MagicMock()
-            mock_tk.Tk.return_value = mock_root
-            mock_tk.Canvas.return_value = mock_canvas
+        # Simulate mouse-press at display (100, _INSTR_BAR_H + 150)
+        press_event = MagicMock()
+        press_event.x = 100
+        press_event.y = _INSTR_BAR_H + 150
+        selector._on_press(press_event)
 
-            # Prevent actual mainloop from blocking
-            selector = RegionSelector.__new__(RegionSelector)
-            selector._result = None
-            selector._cancelled = False
-            selector._x0 = selector._y0 = selector._x1 = selector._y1 = 0
-            selector._rect_id = None
-            selector._frame_w = frame.shape[1]
-            selector._frame_h = frame.shape[0]
+        # Simulate mouse-drag to display (400, _INSTR_BAR_H + 500)
+        drag_event = MagicMock()
+        drag_event.x = 400
+        drag_event.y = _INSTR_BAR_H + 500
+        selector._on_drag(drag_event)
 
-            # Simulate mouse-press at (100, 150)
-            press_event = MagicMock()
-            press_event.x = 100
-            press_event.y = 150
-            selector._on_press(press_event)
+        # Simulate Enter key to confirm
+        selector._on_confirm(MagicMock())
 
-            # Simulate mouse-drag to (400, 500)
-            drag_event = MagicMock()
-            drag_event.x = 400
-            drag_event.y = 500
-            selector._canvas = mock_canvas
-            selector._on_drag(drag_event)
-
-            # Simulate Enter key to confirm
-            selector._on_confirm(MagicMock())
-
-            result = selector._result
-            assert result is not None
-            assert isinstance(result, ContentRegion)
-            assert result.x == 100
-            assert result.y == 150
-            assert result.w == 300  # 400 - 100
-            assert result.h == 350  # 500 - 150
+        result = selector._result
+        assert result is not None
+        assert isinstance(result, ContentRegion)
+        assert result.x == 100
+        assert result.y == 150  # display y minus _INSTR_BAR_H, scale=1 → frame y
+        assert result.w == 300  # 400 - 100
+        assert result.h == 350  # 500 - 150
 
     def test_escape_sets_cancelled(self, monkeypatch):
         """Pressing Escape must set _cancelled=True."""
@@ -191,71 +201,46 @@ class TestRegionSelectorLogic:
         assert selector._result is None
 
     def test_drag_updates_coordinates(self):
-        """_on_drag must update x1/y1 and clamp to frame bounds."""
-        from unittest.mock import MagicMock
+        """_on_drag must update x1/y1 within display bounds."""
+        from kindle_pdf_capture.region_selector import _INSTR_BAR_H
 
-        from kindle_pdf_capture.region_selector import RegionSelector
-
-        selector = RegionSelector.__new__(RegionSelector)
+        selector = self._init_selector(1200, 900)
         selector._x0 = 100
-        selector._y0 = 100
-        selector._x1 = 100
-        selector._y1 = 100
-        selector._frame_w = 1200
-        selector._frame_h = 900
-        selector._rect_id = None
-        selector._canvas = MagicMock()
+        selector._y0 = _INSTR_BAR_H + 100
 
-        # Drag within bounds
-        event = MagicMock()
+        event = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
         event.x = 500
-        event.y = 600
+        event.y = _INSTR_BAR_H + 600
         selector._on_drag(event)
 
         assert selector._x1 == 500
-        assert selector._y1 == 600
+        assert selector._y1 == _INSTR_BAR_H + 600
 
     def test_drag_clamped_to_frame_bounds(self):
-        """_on_drag must clamp coordinates to frame dimensions."""
-        from unittest.mock import MagicMock
+        """_on_drag must clamp coordinates to display dimensions."""
+        from kindle_pdf_capture.region_selector import _INSTR_BAR_H
 
-        from kindle_pdf_capture.region_selector import RegionSelector
+        selector = self._init_selector(1200, 900)
 
-        selector = RegionSelector.__new__(RegionSelector)
-        selector._x0 = 0
-        selector._y0 = 0
-        selector._x1 = 0
-        selector._y1 = 0
-        selector._frame_w = 1200
-        selector._frame_h = 900
-        selector._rect_id = None
-        selector._canvas = MagicMock()
-
-        # Drag beyond frame bounds
-        event = MagicMock()
+        event = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
         event.x = 2000
-        event.y = 1500
+        event.y = 9999
         selector._on_drag(event)
 
+        # x clamped to disp_w=1200; y clamped to img_y0+disp_h
         assert selector._x1 == 1200
-        assert selector._y1 == 900
+        assert selector._y1 == _INSTR_BAR_H + 900
 
     def test_confirm_without_drag_raises(self):
-        """Confirming without drawing a rectangle must raise RegionSelectorCancelled."""
+        """Confirming without drawing a rectangle must flag as cancelled."""
         from unittest.mock import MagicMock
 
-        from kindle_pdf_capture.region_selector import RegionSelector
-
-        selector = RegionSelector.__new__(RegionSelector)
-        selector._x0 = 50
-        selector._y0 = 50
-        selector._x1 = 50  # same as x0 → zero-width
-        selector._y1 = 50  # same as y0 → zero-height
-        selector._cancelled = False
-        selector._result = None
+        selector = self._init_selector(1200, 900)
+        # x0==x1 and y0==y1 → zero-size rect
+        selector._x0 = selector._x1 = 50
+        selector._y0 = selector._y1 = 50
 
         selector._on_confirm(MagicMock())
 
-        # Should flag as cancelled instead of setting result
         assert selector._cancelled is True
         assert selector._result is None
