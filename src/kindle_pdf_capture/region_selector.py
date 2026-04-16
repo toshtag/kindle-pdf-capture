@@ -35,6 +35,12 @@ Pure-logic helpers (also exported for testing)
 from __future__ import annotations
 
 import contextlib
+import json
+import logging
+import os
+import subprocess
+import sys
+import tempfile
 import tkinter as tk
 from typing import ClassVar
 
@@ -107,10 +113,6 @@ _FONT_SIZE = 15
 _INSTRUCTIONS_EN = "Drag to select  |  Drag handles to adjust  |  Enter: confirm  |  Esc: cancel"
 _INSTRUCTIONS_JA = "ドラッグで選択  |  ハンドルで微調整  |  Enter で確定  |  Esc でキャンセル"
 _INSTR_BAR_H = 60  # logical points reserved for instruction bar at top
-
-# Handle identifiers — index into the 8-handle array.
-# Layout: TL=0 TM=1 TR=2 ML=3 MR=4 BL=5 BM=6 BR=7
-_HANDLES = ("TL", "TM", "TR", "ML", "MR", "BL", "BM", "BR")
 
 
 # ---------------------------------------------------------------------------
@@ -478,8 +480,7 @@ class RegionSelector:
         left, top, right, bottom = _normalise_rect(self._x0, self._y0, self._x1, self._y1)
         if right - left < 1 or bottom - top < 1:
             self._cancelled = True
-            if hasattr(self, "_root"):
-                self._root.quit()
+            self._close()
             return
         # Convert logical-point drag coords to frame pixel coords.
         # pts_to_px = frame_w / disp_w  (how many frame pixels per display point)
@@ -539,16 +540,15 @@ _SUBPROCESS_SCRIPT = """\
 import sys, json, os
 import numpy as np
 
-# Reconstruct frame from the temp file path passed as argv[1]
-frame = np.load(sys.argv[1])
-
+# Resolve symlinks so venv-wrapped executables find the real Tcl tree.
+_real_exe_dir = os.path.dirname(os.path.realpath(sys.executable))
 os.environ.setdefault(
     "TCL_LIBRARY",
-    os.path.join(
-        os.path.dirname(sys.executable),
-        "..", "lib", "tcl8.6",
-    ),
+    os.path.normpath(os.path.join(_real_exe_dir, "..", "lib", "tcl8.6")),
 )
+
+# Reconstruct frame from the temp file path passed as argv[1]
+frame = np.load(sys.argv[1])
 
 from kindle_pdf_capture.region_selector import RegionSelector, RegionSelectorCancelled
 
@@ -583,11 +583,6 @@ def select_region(frame: np.ndarray) -> ContentRegion:
     RegionSelectorCancelled
         If the user cancelled without confirming a selection.
     """
-    import json
-    import subprocess
-    import sys
-    import tempfile
-
     with tempfile.NamedTemporaryFile(suffix=".npy", delete=False) as f:
         tmp_path = f.name
 
@@ -599,14 +594,18 @@ def select_region(frame: np.ndarray) -> ContentRegion:
             text=True,
         )
     finally:
-        import os
-
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
 
     if result.returncode == 2:
         raise RegionSelectorCancelled("User cancelled region selection.")
     if result.returncode != 0:
+        logging.getLogger(__name__).error(
+            "Region selector subprocess failed (rc=%d):\nstdout=%r\nstderr=%r",
+            result.returncode,
+            result.stdout,
+            result.stderr,
+        )
         raise RegionSelectorCancelled(
             f"Region selector process failed (rc={result.returncode}): {result.stderr}"
         )
