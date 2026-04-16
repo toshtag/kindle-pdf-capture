@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-04-16
+
+### Fixed
+
+- End-of-book detection no longer triggers prematurely on books with sparse-text
+  pages (title page, half-title, credits). The old detector compared a single
+  post-render frame against a 16×16 hash of the previous frame; pages that share
+  a nearly-uniform background (e.g. gray with only a few characters) produced
+  hash collisions and falsely incremented the duplicate streak.
+  The detector now compares the frame captured **before** the page-turn key with
+  the stable frame captured **after** `wait_for_render` converges, using a
+  changed-pixel ratio (256×256 downscale, pixels with diff > 10, threshold 0.1%)
+  instead of MAD. This correctly distinguishes pages that differ in less than
+  0.5% of their pixel area.
+
 ## [1.3.2] - 2026-04-15
 
 ### Fixed
@@ -276,7 +291,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bilingual documentation (English and Japanese)
 - GitHub PR/issue templates, Dependabot, and security policy
 
-[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.3.2...HEAD
+[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.3.3...HEAD
+[1.3.3]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.2.1...v1.3.0
