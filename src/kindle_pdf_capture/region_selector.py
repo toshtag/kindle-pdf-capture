@@ -34,6 +34,7 @@ Pure-logic helpers (also exported for testing)
 
 from __future__ import annotations
 
+import contextlib
 import tkinter as tk
 from typing import ClassVar
 
@@ -489,13 +490,17 @@ class RegionSelector:
         fx1 = _clamp(round(right * p), 0, self._frame_w)
         fy1 = _clamp(round((bottom - iy) * p), 0, self._frame_h)
         self._result = ContentRegion(x=fx0, y=fy0, w=fx1 - fx0, h=fy1 - fy0)
+        self._close()
+
+    def _close(self) -> None:
+        """Destroy the window immediately and stop the event loop."""
         if hasattr(self, "_root"):
-            self._root.quit()
+            with contextlib.suppress(Exception):
+                self._root.destroy()
 
     def _on_cancel(self, _event: object) -> None:
         self._cancelled = True
-        if hasattr(self, "_root"):
-            self._root.quit()
+        self._close()
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -510,7 +515,6 @@ class RegionSelector:
             If the user pressed Escape or closed the window.
         """
         self._root.mainloop()
-        self._root.destroy()
         if self._cancelled or self._result is None:
             raise RegionSelectorCancelled("User cancelled region selection.")
         return self._result
