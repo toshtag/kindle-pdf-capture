@@ -7,7 +7,6 @@ from the capture loop so each can be tested independently.
 from __future__ import annotations
 
 import enum
-import hashlib
 import json
 import logging
 from dataclasses import dataclass
@@ -83,7 +82,6 @@ class CaptureSession:
         self._cfg = config
         self._results: list[PageResult] = []
         self._duplicate_streak: int = 0
-        self._last_hash: str | None = None
 
     # ------------------------------------------------------------------
     # Path helpers
@@ -110,14 +108,18 @@ class CaptureSession:
     def record_result(self, result: PageResult) -> None:
         self._results.append(result)
 
-    def record_duplicate(self, frame: np.ndarray) -> None:
-        """Call when the page has not changed after a page-turn attempt."""
-        h = _frame_hash(frame)
-        if h == self._last_hash:
-            self._duplicate_streak += 1
+    def record_duplicate(self, before: np.ndarray, after: np.ndarray) -> None:
+        """Compare frames captured before and after a page-turn key press.
+
+        If the two frames differ (page actually turned), the streak resets to 0.
+        If they are visually identical (key had no effect), the streak increments.
+        This is more robust than hashing a single frame because it detects change
+        regardless of how similar adjacent pages look in isolation.
+        """
+        if _frames_differ(before, after):
+            self._duplicate_streak = 0
         else:
-            self._duplicate_streak = 1
-        self._last_hash = h
+            self._duplicate_streak += 1
         logger.debug("Duplicate streak: %d", self._duplicate_streak)
 
     # ------------------------------------------------------------------
@@ -182,10 +184,15 @@ def load_session(config: CaptureConfig) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
-def _frame_hash(frame: np.ndarray) -> str:
-    """Return a fast perceptual hash of *frame* for duplicate detection."""
-    # Downscale to 16x16 grayscale and MD5 the bytes
-    import cv2
+def _frames_differ(before: np.ndarray, after: np.ndarray, threshold: float = 0.02) -> bool:
+    """Return True when *before* and *after* differ enough to indicate a page turn.
 
-    small = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (16, 16))
-    return hashlib.md5(small.tobytes()).hexdigest()
+    Uses the same central-patch diff ratio as render_wait.compute_diff_ratio so
+    the sensitivity is consistent across the pipeline.  The default threshold of
+    0.02 (2 % of the central 200x200 patch) matches render_wait's convergence
+    threshold, meaning any change that render_wait would consider "not yet
+    stable" is also treated as a genuine page turn here.
+    """
+    from kindle_pdf_capture.render_wait import compute_diff_ratio
+
+    return compute_diff_ratio(before, after) > threshold
