@@ -248,7 +248,6 @@ def _capture_one_page(
     config: CaptureConfig,
     session: CaptureSession,
     locked_crop_y: int | None,
-    manual_region: ContentRegion | None = None,
 ) -> int | None:
     """Capture, crop, normalise, and save one Kindle page.
 
@@ -259,8 +258,6 @@ def _capture_one_page(
     config        : CaptureConfig with output paths and image settings.
     session       : Active CaptureSession (used for output paths).
     locked_crop_y : Currently locked reading-mode y, or None.
-    manual_region : If set, use this region instead of detect_content_region.
-                    Phase 0 automatic detection is bypassed entirely.
 
     Returns
     -------
@@ -279,27 +276,20 @@ def _capture_one_page(
         raw_path = session.raw_path(page_num)
         save_jpeg(frame, raw_path, quality=config.jpeg_quality)
 
-    if manual_region is not None:
-        # Manual crop: use the user-drawn region directly, no auto detection.
-        region = manual_region
+    try:
+        region = detect_content_region(frame)
+
+        titlebar_y = _find_titlebar_bottom(frame, search_h=60)
+        region, locked_crop_y = _apply_crop_lock(region, frame, titlebar_y, locked_crop_y)
+
         cropped = frame[region.slice()]
+        # Scale proportionally so all pages share the same pixels-per-unit ratio.
         scale = config.resize_width / frame.shape[1]
         target_w = max(1, round(region.w * scale))
-    else:
-        try:
-            region = detect_content_region(frame)
-
-            titlebar_y = _find_titlebar_bottom(frame, search_h=60)
-            region, locked_crop_y = _apply_crop_lock(region, frame, titlebar_y, locked_crop_y)
-
-            cropped = frame[region.slice()]
-            # Scale proportionally so all pages share the same pixels-per-unit ratio.
-            scale = config.resize_width / frame.shape[1]
-            target_w = max(1, round(region.w * scale))
-        except CropError as exc:
-            log.warning("Page %d crop failed: %s — using full frame.", page_num, exc)
-            cropped = frame
-            target_w = config.resize_width
+    except CropError as exc:
+        log.warning("Page %d crop failed: %s — using full frame.", page_num, exc)
+        cropped = frame
+        target_w = config.resize_width
 
     normalised = normalize_image(cropped, resize_width=target_w)
     cropped_path = session.cropped_path(page_num)
@@ -318,12 +308,53 @@ def _capture_one_page(
 # ---------------------------------------------------------------------------
 
 
+def _phase0_manual_resize(
+    window: KindleWindow,
+    cover_region: ContentRegion,
+) -> tuple[int, int] | None:
+    """Phase 0 alternative: resize the window based on the user-selected cover region.
+
+    Computes the logical window width that matches the selected region width at
+    the current HiDPI scale factor, then calls resize_kindle_window.
+
+    Parameters
+    ----------
+    window        : KindleWindow with current logical dimensions.
+    cover_region  : ContentRegion selected by the user on the cover frame
+                    (coordinates are in physical pixels).
+
+    Returns
+    -------
+    (orig_w, orig_h) if the window was resized, or None on error.
+    """
+    log = logging.getLogger(__name__)
+    try:
+        cover_frame = capture_window(window)
+        scale_factor = cover_frame.shape[1] / window.width
+        target_logical_w = round(cover_region.w / scale_factor)
+        target_logical_h = window.height
+        log.info(
+            "Manual cover region: %dpx wide (scale %.1f) → resizing window to %d logical pts.",
+            cover_region.w,
+            scale_factor,
+            target_logical_w,
+        )
+        orig_window_size = resize_kindle_window(
+            window, target_width=target_logical_w, target_height=target_logical_h
+        )
+        time.sleep(1.5)
+        return orig_window_size
+    except Exception as exc:
+        log.warning("Manual window resize failed: %s — continuing at current size.", exc)
+        return None
+
+
 def _run_capture(
     config: CaptureConfig,
     *,
     pages_to_retry: list[int],
     key_code: int,
-    manual_region: ContentRegion | None = None,
+    manual_cover_region: ContentRegion | None = None,
 ) -> None:
     """Outer capture loop: Phase 0, page loop, PDF build, optional OCR.
 
@@ -331,8 +362,10 @@ def _run_capture(
 
     Parameters
     ----------
-    manual_region : If provided, skip Phase 0 automatic resize and use this
-                    ContentRegion for every page instead of detect_content_region.
+    manual_cover_region : If provided, use the user-selected cover region to
+                          resize the Kindle window (Phase 0 replacement).
+                          The normal page pipeline (detect_content_region) is
+                          used for all pages regardless.
     """
     config.ensure_dirs()
     log = logging.getLogger(__name__)
@@ -341,16 +374,9 @@ def _run_capture(
     window = find_kindle_window()
     focus_window(window)
 
-    if manual_region is not None:
-        # Manual crop mode: skip Phase 0 entirely.
-        orig_window_size = None
-        log.info(
-            "Manual crop region: x=%d y=%d w=%d h=%d — Phase 0 skipped.",
-            manual_region.x,
-            manual_region.y,
-            manual_region.w,
-            manual_region.h,
-        )
+    if manual_cover_region is not None:
+        # Manual crop mode: resize window to match the user-selected cover region.
+        orig_window_size = _phase0_manual_resize(window, manual_cover_region)
     else:
         # Phase 0: resize window to the cover page's natural width.
         orig_window_size = _phase0_resize_window(window)
@@ -387,9 +413,7 @@ def _run_capture(
                 status.update(f"[bold]Capturing[/bold] page {page_label} …")
 
                 pre_turn_frame = capture_window(window)
-                locked_crop_y = _capture_one_page(
-                    page_num, window, config, session, locked_crop_y, manual_region
-                )
+                locked_crop_y = _capture_one_page(page_num, window, config, session, locked_crop_y)
 
                 send_page_turn_key(window.pid, key_code)
                 wait_result = wait_for_render(capture_fn=lambda: capture_window(window))
@@ -613,19 +637,19 @@ def cli(
     click.pause(info="")
 
     try:
-        manual_region: ContentRegion | None = None
+        manual_cover_region: ContentRegion | None = None
         if manual_crop:
             check_accessibility()
             cover_window = find_kindle_window()
             cover_frame = capture_window(cover_window)
             try:
-                manual_region = select_region(cover_frame)
+                manual_cover_region = select_region(cover_frame)
                 log.info(
-                    "Manual region confirmed: x=%d y=%d w=%d h=%d",
-                    manual_region.x,
-                    manual_region.y,
-                    manual_region.w,
-                    manual_region.h,
+                    "Manual cover region confirmed: x=%d y=%d w=%d h=%d",
+                    manual_cover_region.x,
+                    manual_cover_region.y,
+                    manual_cover_region.w,
+                    manual_cover_region.h,
                 )
             except RegionSelectorCancelled:
                 console.print("[bold yellow]Cancelled.[/bold yellow] No region selected; exiting.")
@@ -635,7 +659,7 @@ def cli(
             config,
             pages_to_retry=pages_to_retry,
             key_code=key_code,
-            manual_region=manual_region,
+            manual_cover_region=manual_cover_region,
         )
     except (AccessibilityError, WindowCaptureError) as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}")
