@@ -1258,131 +1258,108 @@ class TestProgressStatus:
 
 
 class TestManualCrop:
-    """--manual-crop must invoke the region selector and skip Phase 0 resize.
+    """--manual-crop replaces Phase 0 auto-detection with a manual cover selection.
 
     When the flag is given:
-    - select_region() is called once before the capture loop starts.
-    - Phase 0 (resize_kindle_window for cover detection) must NOT be called.
-    - The ContentRegion returned by select_region is used as the crop area
-      for every page (detect_content_region must NOT be called).
+    - select_region() is called once with the cover frame.
+    - resize_kindle_window() is called with a target width derived from the
+      selected region width and the current HiDPI scale factor.
+    - detect_content_region() is still called for every page (normal pipeline).
     - The run exits with code 0.
     """
 
-    def _run_with_manual_crop(
-        self,
-        tmp_path: Path,
-        selector_return=None,
-        selector_raises=None,
-    ):
-        from kindle_pdf_capture.cropper import ContentRegion
+    def _base_patches(self, window, frame, manual_region, resize_spy=None):
+        """Return a dict of patch targets → return values / side_effects."""
         from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
 
-        runner = CliRunner()
-        window = _make_window()
-        frame = _content_bgr()
-
-        manual_region = ContentRegion(x=50, y=60, w=1000, h=750)
-
-        def _fake_select(f):
-            if selector_raises:
-                raise selector_raises
-            return selector_return if selector_return is not None else manual_region
-
-        with (
-            patch("kindle_pdf_capture.main.check_accessibility"),
-            patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
-            patch("kindle_pdf_capture.main.focus_window"),
-            patch("kindle_pdf_capture.main.capture_window", return_value=frame),
-            patch("kindle_pdf_capture.main.send_page_turn_key"),
-            patch(
-                "kindle_pdf_capture.main.wait_for_render",
-                return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
+        patches = {
+            "kindle_pdf_capture.main.check_accessibility": None,
+            "kindle_pdf_capture.main.find_kindle_window": window,
+            "kindle_pdf_capture.main.focus_window": None,
+            "kindle_pdf_capture.main.capture_window": frame,
+            "kindle_pdf_capture.main.send_page_turn_key": None,
+            "kindle_pdf_capture.main.wait_for_render": WaitResult(
+                status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2
             ),
-            patch("kindle_pdf_capture.main.select_region", side_effect=_fake_select),
-            patch("kindle_pdf_capture.main.normalize_image", return_value=frame),
-            patch("kindle_pdf_capture.main.save_jpeg"),
-            patch("kindle_pdf_capture.main.build_pdf"),
-            patch("kindle_pdf_capture.main.optimise_pdf"),
-            patch("kindle_pdf_capture.main.time.sleep"),
-        ):
-            result = runner.invoke(
-                cli,
-                [
-                    "--out",
-                    str(tmp_path / "out"),
-                    "--start-delay",
-                    "0",
-                    "--max-pages",
-                    "1",
-                    "--manual-crop",
-                ],
-            )
-        return result
+            "kindle_pdf_capture.main.select_region": manual_region,
+            "kindle_pdf_capture.main.normalize_image": frame,
+            "kindle_pdf_capture.main.save_jpeg": None,
+            "kindle_pdf_capture.main.build_pdf": None,
+            "kindle_pdf_capture.main.optimise_pdf": None,
+            "kindle_pdf_capture.main.time.sleep": None,
+        }
+        return patches
+
+    def _run(self, tmp_path, patches, extra_args=None):
+        runner = CliRunner()
+        ctx_patches = []
+        for target, retval in patches.items():
+            if (callable(retval) and not isinstance(retval, type)) or isinstance(retval, Exception):
+                ctx_patches.append(patch(target, side_effect=retval))
+            else:
+                ctx_patches.append(patch(target, return_value=retval))
+
+        args = [
+            "--out",
+            str(tmp_path / "out"),
+            "--start-delay",
+            "0",
+            "--max-pages",
+            "1",
+            "--manual-crop",
+        ]
+        if extra_args:
+            args += extra_args
+
+        import contextlib
+
+        with contextlib.ExitStack() as stack:
+            for p in ctx_patches:
+                stack.enter_context(p)
+            return runner.invoke(cli, args)
 
     def test_manual_crop_flag_accepted(self, tmp_path: Path) -> None:
         """--manual-crop is a valid flag and exits with code 0."""
-        result = self._run_with_manual_crop(tmp_path)
-        assert result.exit_code == 0, result.output
-
-    def test_manual_crop_skips_phase0_resize(self, tmp_path: Path) -> None:
-        """With --manual-crop, resize_kindle_window must NOT be called for Phase 0."""
         from kindle_pdf_capture.cropper import ContentRegion
-        from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
 
-        runner = CliRunner()
         window = _make_window()
         frame = _content_bgr()
         manual_region = ContentRegion(x=50, y=60, w=1000, h=750)
-        resize_calls: list = []
+        patches = self._base_patches(window, frame, manual_region)
+        patches["kindle_pdf_capture.main.resize_kindle_window"] = (window.width, window.height)
+        result = self._run(tmp_path, patches)
+        assert result.exit_code == 0, result.output
 
-        with (
-            patch("kindle_pdf_capture.main.check_accessibility"),
-            patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
-            patch("kindle_pdf_capture.main.focus_window"),
-            patch("kindle_pdf_capture.main.capture_window", return_value=frame),
-            patch("kindle_pdf_capture.main.send_page_turn_key"),
-            patch(
-                "kindle_pdf_capture.main.wait_for_render",
-                return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
-            ),
-            patch("kindle_pdf_capture.main.select_region", return_value=manual_region),
-            patch(
-                "kindle_pdf_capture.main.resize_kindle_window",
-                side_effect=lambda *a, **kw: (
-                    resize_calls.append(kw),
-                    (window.width, window.height),
-                )[1],
-            ),
-            patch("kindle_pdf_capture.main.normalize_image", return_value=frame),
-            patch("kindle_pdf_capture.main.save_jpeg"),
-            patch("kindle_pdf_capture.main.build_pdf"),
-            patch("kindle_pdf_capture.main.optimise_pdf"),
-            patch("kindle_pdf_capture.main.time.sleep"),
-        ):
-            result = runner.invoke(
-                cli,
-                [
-                    "--out",
-                    str(tmp_path / "out"),
-                    "--start-delay",
-                    "0",
-                    "--max-pages",
-                    "1",
-                    "--manual-crop",
-                ],
-            )
+    def test_manual_crop_calls_resize_with_selected_width(self, tmp_path: Path) -> None:
+        """resize_kindle_window must be called with width derived from the selected region."""
+        from kindle_pdf_capture.cropper import ContentRegion
+
+        window = _make_window()  # width=1200 logical pts
+        frame = _content_bgr()  # shape (900, 1200, 3)
+        # Selected region covers 600px of a 1200px-wide frame → 50% of frame width.
+        # scale_factor = frame_w / window.width = 1200/1200 = 1.0
+        # Expected target_logical_w = round(600 / 1.0) = 600
+        manual_region = ContentRegion(x=300, y=60, w=600, h=700)
+        resize_calls: list[dict] = []
+
+        def _fake_resize(win, *, target_width, target_height, **kw):
+            resize_calls.append({"target_width": target_width, "target_height": target_height})
+            return (win.width, win.height)
+
+        patches = self._base_patches(window, frame, manual_region)
+        patches["kindle_pdf_capture.main.resize_kindle_window"] = _fake_resize
+        result = self._run(tmp_path, patches)
 
         assert result.exit_code == 0, result.output
-        assert resize_calls == [], (
-            f"resize_kindle_window must not be called with --manual-crop, got: {resize_calls}"
+        assert len(resize_calls) >= 1, "resize_kindle_window must be called"
+        assert resize_calls[0]["target_width"] == 600, (
+            f"Expected target_width=600, got {resize_calls[0]['target_width']}"
         )
 
-    def test_manual_crop_uses_selected_region_not_detect(self, tmp_path: Path) -> None:
-        """With --manual-crop, detect_content_region must NOT be called."""
+    def test_manual_crop_detect_content_region_still_called(self, tmp_path: Path) -> None:
+        """With --manual-crop, detect_content_region must still be called for each page."""
         from kindle_pdf_capture.cropper import ContentRegion
-        from kindle_pdf_capture.render_wait import WaitResult, WaitStatus
 
-        runner = CliRunner()
         window = _make_window()
         frame = _content_bgr()
         manual_region = ContentRegion(x=50, y=60, w=1000, h=750)
@@ -1392,70 +1369,41 @@ class TestManualCrop:
             detect_calls.append(f)
             return ContentRegion(x=0, y=0, w=f.shape[1], h=f.shape[0])
 
-        with (
-            patch("kindle_pdf_capture.main.check_accessibility"),
-            patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
-            patch("kindle_pdf_capture.main.focus_window"),
-            patch("kindle_pdf_capture.main.capture_window", return_value=frame),
-            patch("kindle_pdf_capture.main.send_page_turn_key"),
-            patch(
-                "kindle_pdf_capture.main.wait_for_render",
-                return_value=WaitResult(status=WaitStatus.CONVERGED, elapsed=0.1, iterations=2),
-            ),
-            patch("kindle_pdf_capture.main.select_region", return_value=manual_region),
-            patch("kindle_pdf_capture.main.detect_content_region", side_effect=_fake_detect),
-            patch("kindle_pdf_capture.main.normalize_image", return_value=frame),
-            patch("kindle_pdf_capture.main.save_jpeg"),
-            patch("kindle_pdf_capture.main.build_pdf"),
-            patch("kindle_pdf_capture.main.optimise_pdf"),
-            patch("kindle_pdf_capture.main.time.sleep"),
-        ):
-            result = runner.invoke(
-                cli,
-                [
-                    "--out",
-                    str(tmp_path / "out"),
-                    "--start-delay",
-                    "0",
-                    "--max-pages",
-                    "1",
-                    "--manual-crop",
-                ],
-            )
+        patches = self._base_patches(window, frame, manual_region)
+        patches["kindle_pdf_capture.main.resize_kindle_window"] = (window.width, window.height)
+        patches["kindle_pdf_capture.main.detect_content_region"] = _fake_detect
+        result = self._run(tmp_path, patches)
 
         assert result.exit_code == 0, result.output
-        assert detect_calls == [], (
-            f"detect_content_region must not be called with --manual-crop, got {len(detect_calls)} calls"
+        assert len(detect_calls) >= 1, (
+            "detect_content_region must be called for each page with --manual-crop"
         )
 
     def test_manual_crop_cancelled_exits_gracefully(self, tmp_path: Path) -> None:
         """If the user cancels the selector (Escape), kpc must exit with a non-zero code."""
         from kindle_pdf_capture.region_selector import RegionSelectorCancelled
 
-        runner = CliRunner()
         window = _make_window()
         frame = _content_bgr()
+        patches = self._base_patches(window, frame, manual_region=None)
+        patches["kindle_pdf_capture.main.select_region"] = RegionSelectorCancelled("cancelled")
 
-        with (
-            patch("kindle_pdf_capture.main.check_accessibility"),
-            patch("kindle_pdf_capture.main.find_kindle_window", return_value=window),
-            patch("kindle_pdf_capture.main.focus_window"),
-            patch("kindle_pdf_capture.main.capture_window", return_value=frame),
-            patch(
-                "kindle_pdf_capture.main.select_region",
-                side_effect=RegionSelectorCancelled("cancelled"),
-            ),
-            patch("kindle_pdf_capture.main.time.sleep"),
-        ):
+        runner = CliRunner()
+        ctx_patches = []
+        for target, retval in patches.items():
+            if isinstance(retval, Exception) or (callable(retval) and not isinstance(retval, type)):
+                ctx_patches.append(patch(target, side_effect=retval))
+            else:
+                ctx_patches.append(patch(target, return_value=retval))
+
+        import contextlib
+
+        with contextlib.ExitStack() as stack:
+            for p in ctx_patches:
+                stack.enter_context(p)
             result = runner.invoke(
                 cli,
-                [
-                    "--out",
-                    str(tmp_path / "out"),
-                    "--start-delay",
-                    "0",
-                    "--manual-crop",
-                ],
+                ["--out", str(tmp_path / "out"), "--start-delay", "0", "--manual-crop"],
             )
 
         assert result.exit_code != 0, "Cancelled selector must exit non-zero"
