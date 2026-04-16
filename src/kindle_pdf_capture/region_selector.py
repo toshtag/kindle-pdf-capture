@@ -493,8 +493,10 @@ class RegionSelector:
         self._close()
 
     def _close(self) -> None:
-        """Destroy the window immediately and stop the event loop."""
+        """Stop the event loop and destroy the window."""
         if hasattr(self, "_root"):
+            with contextlib.suppress(Exception):
+                self._root.quit()
             with contextlib.suppress(Exception):
                 self._root.destroy()
 
@@ -515,6 +517,8 @@ class RegionSelector:
             If the user pressed Escape or closed the window.
         """
         self._root.mainloop()
+        # mainloop returns after _close() calls quit(); destroy() has already
+        # been called inside _close(), so no second destroy() needed here.
         if self._cancelled or self._result is None:
             raise RegionSelectorCancelled("User cancelled region selection.")
         return self._result
