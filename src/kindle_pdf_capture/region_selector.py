@@ -93,18 +93,20 @@ class RegionSelector:
         self._result: ContentRegion | None = None
         self._cancelled = False
 
-        # Convert BGR→RGB then to a PhotoImage
-        rgb = frame[:, :, ::-1].copy()
-        from PIL import Image, ImageTk  # local import keeps top-level light
-
-        pil_img = Image.fromarray(rgb)
-        self._photo = ImageTk.PhotoImage(pil_img)
-
         self._root = tk.Tk()
         self._root.title(title)
         self._root.resizable(False, False)
         # Keep the window on top so it covers Kindle
         self._root.attributes("-topmost", True)
+
+        # Convert BGR→RGB then to a PhotoImage.
+        # PhotoImage must be created AFTER tk.Tk() or tkinter raises
+        # "Too early to create image: no default root window".
+        rgb = frame[:, :, ::-1].copy()
+        from PIL import Image, ImageTk  # local import keeps top-level light
+
+        pil_img = Image.fromarray(rgb)
+        self._photo = ImageTk.PhotoImage(pil_img)
 
         self._canvas = tk.Canvas(
             self._root,
