@@ -41,7 +41,12 @@ import click
 from rich.console import Console
 from rich.logging import RichHandler
 
-from kindle_pdf_capture.cropper import CropError, _find_titlebar_bottom, detect_content_region
+from kindle_pdf_capture.cropper import (
+    ContentRegion,
+    CropError,
+    _find_titlebar_bottom,
+    detect_content_region,
+)
 from kindle_pdf_capture.normalize import normalize_image, save_jpeg
 from kindle_pdf_capture.ocr import run_ocr, validate_ocr_lang
 from kindle_pdf_capture.orchestrator import (
@@ -61,6 +66,7 @@ from kindle_pdf_capture.page_turner import (
     send_page_turn_key,
 )
 from kindle_pdf_capture.pdf_builder import build_pdf, optimise_pdf
+from kindle_pdf_capture.region_selector import RegionSelectorCancelled, select_region
 from kindle_pdf_capture.render_wait import WaitStatus, wait_for_render
 from kindle_pdf_capture.window_capture import (
     KindleWindow,
@@ -242,16 +248,19 @@ def _capture_one_page(
     config: CaptureConfig,
     session: CaptureSession,
     locked_crop_y: int | None,
+    manual_region: ContentRegion | None = None,
 ) -> int | None:
     """Capture, crop, normalise, and save one Kindle page.
 
     Parameters
     ----------
-    page_num     : 1-based page index.
-    window       : KindleWindow snapshot (pid, geometry).
-    config       : CaptureConfig with output paths and image settings.
-    session      : Active CaptureSession (used for output paths).
-    locked_crop_y: Currently locked reading-mode y, or None.
+    page_num      : 1-based page index.
+    window        : KindleWindow snapshot (pid, geometry).
+    config        : CaptureConfig with output paths and image settings.
+    session       : Active CaptureSession (used for output paths).
+    locked_crop_y : Currently locked reading-mode y, or None.
+    manual_region : If set, use this region instead of detect_content_region.
+                    Phase 0 automatic detection is bypassed entirely.
 
     Returns
     -------
@@ -270,20 +279,27 @@ def _capture_one_page(
         raw_path = session.raw_path(page_num)
         save_jpeg(frame, raw_path, quality=config.jpeg_quality)
 
-    try:
-        region = detect_content_region(frame)
-
-        titlebar_y = _find_titlebar_bottom(frame, search_h=60)
-        region, locked_crop_y = _apply_crop_lock(region, frame, titlebar_y, locked_crop_y)
-
+    if manual_region is not None:
+        # Manual crop: use the user-drawn region directly, no auto detection.
+        region = manual_region
         cropped = frame[region.slice()]
-        # Scale proportionally so all pages share the same pixels-per-unit ratio.
         scale = config.resize_width / frame.shape[1]
         target_w = max(1, round(region.w * scale))
-    except CropError as exc:
-        log.warning("Page %d crop failed: %s — using full frame.", page_num, exc)
-        cropped = frame
-        target_w = config.resize_width
+    else:
+        try:
+            region = detect_content_region(frame)
+
+            titlebar_y = _find_titlebar_bottom(frame, search_h=60)
+            region, locked_crop_y = _apply_crop_lock(region, frame, titlebar_y, locked_crop_y)
+
+            cropped = frame[region.slice()]
+            # Scale proportionally so all pages share the same pixels-per-unit ratio.
+            scale = config.resize_width / frame.shape[1]
+            target_w = max(1, round(region.w * scale))
+        except CropError as exc:
+            log.warning("Page %d crop failed: %s — using full frame.", page_num, exc)
+            cropped = frame
+            target_w = config.resize_width
 
     normalised = normalize_image(cropped, resize_width=target_w)
     cropped_path = session.cropped_path(page_num)
@@ -307,10 +323,16 @@ def _run_capture(
     *,
     pages_to_retry: list[int],
     key_code: int,
+    manual_region: ContentRegion | None = None,
 ) -> None:
     """Outer capture loop: Phase 0, page loop, PDF build, optional OCR.
 
     Separated from the CLI handler for testability.
+
+    Parameters
+    ----------
+    manual_region : If provided, skip Phase 0 automatic resize and use this
+                    ContentRegion for every page instead of detect_content_region.
     """
     config.ensure_dirs()
     log = logging.getLogger(__name__)
@@ -319,8 +341,19 @@ def _run_capture(
     window = find_kindle_window()
     focus_window(window)
 
-    # Phase 0: resize window to the cover page's natural width.
-    orig_window_size = _phase0_resize_window(window)
+    if manual_region is not None:
+        # Manual crop mode: skip Phase 0 entirely.
+        orig_window_size = None
+        log.info(
+            "Manual crop region: x=%d y=%d w=%d h=%d — Phase 0 skipped.",
+            manual_region.x,
+            manual_region.y,
+            manual_region.w,
+            manual_region.h,
+        )
+    else:
+        # Phase 0: resize window to the cover page's natural width.
+        orig_window_size = _phase0_resize_window(window)
 
     session = CaptureSession(config)
 
@@ -354,7 +387,9 @@ def _run_capture(
                 status.update(f"[bold]Capturing[/bold] page {page_label} …")
 
                 pre_turn_frame = capture_window(window)
-                locked_crop_y = _capture_one_page(page_num, window, config, session, locked_crop_y)
+                locked_crop_y = _capture_one_page(
+                    page_num, window, config, session, locked_crop_y, manual_region
+                )
 
                 send_page_turn_key(window.pid, key_code)
                 wait_result = wait_for_render(capture_fn=lambda: capture_window(window))
@@ -489,6 +524,17 @@ def _run_capture(
     help="Re-capture only the pages listed in logs/failed_pages.json.",
 )
 @click.option(
+    "--manual-crop",
+    is_flag=True,
+    default=False,
+    help=(
+        "Show a drag-to-select overlay on the Kindle screenshot to manually "
+        "define the capture area.  Use this when the cover is all-white and "
+        "automatic aspect-ratio detection fails.  Press Enter to confirm or "
+        "Esc to cancel."
+    ),
+)
+@click.option(
     "--debug",
     is_flag=True,
     default=False,
@@ -507,6 +553,7 @@ def cli(
     ocr_lang: str,
     ocr_optimize: int,
     retry_failed: bool,
+    manual_crop: bool,
     debug: bool,
 ) -> None:
     """Capture Kindle for Mac pages and assemble them into a PDF."""
@@ -543,19 +590,53 @@ def cli(
         else:
             log.info("No failed pages found; capturing from the beginning.")
 
-    console.print(
-        "\n[bold]Ready to capture.[/bold]\n"
-        "  Navigate Kindle to the [bold]cover page[/bold] of the book,\n"
-        "  then press [bold]Enter[/bold] to start.\n"
-        "\n"
-        "[bold]キャプチャの準備ができました。[/bold]\n"
-        "  Kindle で本の[bold]表紙ページ[/bold]を表示してから、\n"
-        "  [bold]Enter[/bold] を押してください。\n"
-    )
+    if manual_crop:
+        console.print(
+            "\n[bold]Manual crop mode.[/bold]\n"
+            "  Navigate Kindle to the [bold]cover page[/bold] of the book,\n"
+            "  then press [bold]Enter[/bold] to open the region selector.\n"
+            "\n"
+            "[bold]手動クロップモード。[/bold]\n"
+            "  Kindle で本の[bold]表紙ページ[/bold]を表示してから、\n"
+            "  [bold]Enter[/bold] を押して領域選択画面を開いてください。\n"
+        )
+    else:
+        console.print(
+            "\n[bold]Ready to capture.[/bold]\n"
+            "  Navigate Kindle to the [bold]cover page[/bold] of the book,\n"
+            "  then press [bold]Enter[/bold] to start.\n"
+            "\n"
+            "[bold]キャプチャの準備ができました。[/bold]\n"
+            "  Kindle で本の[bold]表紙ページ[/bold]を表示してから、\n"
+            "  [bold]Enter[/bold] を押してください。\n"
+        )
     click.pause(info="")
 
     try:
-        _run_capture(config, pages_to_retry=pages_to_retry, key_code=key_code)
+        manual_region: ContentRegion | None = None
+        if manual_crop:
+            check_accessibility()
+            cover_window = find_kindle_window()
+            cover_frame = capture_window(cover_window)
+            try:
+                manual_region = select_region(cover_frame)
+                log.info(
+                    "Manual region confirmed: x=%d y=%d w=%d h=%d",
+                    manual_region.x,
+                    manual_region.y,
+                    manual_region.w,
+                    manual_region.h,
+                )
+            except RegionSelectorCancelled:
+                console.print("[bold yellow]Cancelled.[/bold yellow] No region selected; exiting.")
+                sys.exit(1)
+
+        _run_capture(
+            config,
+            pages_to_retry=pages_to_retry,
+            key_code=key_code,
+            manual_region=manual_region,
+        )
     except (AccessibilityError, WindowCaptureError) as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}")
         log.debug("Fatal error", exc_info=True)
