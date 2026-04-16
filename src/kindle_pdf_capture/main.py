@@ -41,7 +41,12 @@ import click
 from rich.console import Console
 from rich.logging import RichHandler
 
-from kindle_pdf_capture.cropper import CropError, _find_titlebar_bottom, detect_content_region
+from kindle_pdf_capture.cropper import (
+    ContentRegion,
+    CropError,
+    _find_titlebar_bottom,
+    detect_content_region,
+)
 from kindle_pdf_capture.normalize import normalize_image, save_jpeg
 from kindle_pdf_capture.ocr import run_ocr, validate_ocr_lang
 from kindle_pdf_capture.orchestrator import (
@@ -61,6 +66,7 @@ from kindle_pdf_capture.page_turner import (
     send_page_turn_key,
 )
 from kindle_pdf_capture.pdf_builder import build_pdf, optimise_pdf
+from kindle_pdf_capture.region_selector import RegionSelectorCancelled, select_region
 from kindle_pdf_capture.render_wait import WaitStatus, wait_for_render
 from kindle_pdf_capture.window_capture import (
     KindleWindow,
@@ -247,11 +253,11 @@ def _capture_one_page(
 
     Parameters
     ----------
-    page_num     : 1-based page index.
-    window       : KindleWindow snapshot (pid, geometry).
-    config       : CaptureConfig with output paths and image settings.
-    session      : Active CaptureSession (used for output paths).
-    locked_crop_y: Currently locked reading-mode y, or None.
+    page_num      : 1-based page index.
+    window        : KindleWindow snapshot (pid, geometry).
+    config        : CaptureConfig with output paths and image settings.
+    session       : Active CaptureSession (used for output paths).
+    locked_crop_y : Currently locked reading-mode y, or None.
 
     Returns
     -------
@@ -302,15 +308,64 @@ def _capture_one_page(
 # ---------------------------------------------------------------------------
 
 
+def _phase0_manual_resize(
+    window: KindleWindow,
+    cover_region: ContentRegion,
+) -> tuple[int, int] | None:
+    """Phase 0 alternative: resize the window based on the user-selected cover region.
+
+    Computes the logical window width that matches the selected region width at
+    the current HiDPI scale factor, then calls resize_kindle_window.
+
+    Parameters
+    ----------
+    window        : KindleWindow with current logical dimensions.
+    cover_region  : ContentRegion selected by the user on the cover frame
+                    (coordinates are in physical pixels).
+
+    Returns
+    -------
+    (orig_w, orig_h) if the window was resized, or None on error.
+    """
+    log = logging.getLogger(__name__)
+    try:
+        cover_frame = capture_window(window)
+        scale_factor = cover_frame.shape[1] / window.width
+        target_logical_w = round(cover_region.w / scale_factor)
+        target_logical_h = window.height
+        log.info(
+            "Manual cover region: %dpx wide (scale %.1f) → resizing window to %d logical pts.",
+            cover_region.w,
+            scale_factor,
+            target_logical_w,
+        )
+        orig_window_size = resize_kindle_window(
+            window, target_width=target_logical_w, target_height=target_logical_h
+        )
+        time.sleep(1.5)
+        return orig_window_size
+    except Exception as exc:
+        log.warning("Manual window resize failed: %s — continuing at current size.", exc)
+        return None
+
+
 def _run_capture(
     config: CaptureConfig,
     *,
     pages_to_retry: list[int],
     key_code: int,
+    manual_cover_region: ContentRegion | None = None,
 ) -> None:
     """Outer capture loop: Phase 0, page loop, PDF build, optional OCR.
 
     Separated from the CLI handler for testability.
+
+    Parameters
+    ----------
+    manual_cover_region : If provided, use the user-selected cover region to
+                          resize the Kindle window (Phase 0 replacement).
+                          The normal page pipeline (detect_content_region) is
+                          used for all pages regardless.
     """
     config.ensure_dirs()
     log = logging.getLogger(__name__)
@@ -319,8 +374,12 @@ def _run_capture(
     window = find_kindle_window()
     focus_window(window)
 
-    # Phase 0: resize window to the cover page's natural width.
-    orig_window_size = _phase0_resize_window(window)
+    if manual_cover_region is not None:
+        # Manual crop mode: resize window to match the user-selected cover region.
+        orig_window_size = _phase0_manual_resize(window, manual_cover_region)
+    else:
+        # Phase 0: resize window to the cover page's natural width.
+        orig_window_size = _phase0_resize_window(window)
 
     session = CaptureSession(config)
 
@@ -489,6 +548,17 @@ def _run_capture(
     help="Re-capture only the pages listed in logs/failed_pages.json.",
 )
 @click.option(
+    "--manual-crop",
+    is_flag=True,
+    default=False,
+    help=(
+        "Show a drag-to-select overlay on the Kindle screenshot to manually "
+        "define the capture area.  Use this when the cover is all-white and "
+        "automatic aspect-ratio detection fails.  Press Enter to confirm or "
+        "Esc to cancel."
+    ),
+)
+@click.option(
     "--debug",
     is_flag=True,
     default=False,
@@ -507,6 +577,7 @@ def cli(
     ocr_lang: str,
     ocr_optimize: int,
     retry_failed: bool,
+    manual_crop: bool,
     debug: bool,
 ) -> None:
     """Capture Kindle for Mac pages and assemble them into a PDF."""
@@ -543,19 +614,53 @@ def cli(
         else:
             log.info("No failed pages found; capturing from the beginning.")
 
-    console.print(
-        "\n[bold]Ready to capture.[/bold]\n"
-        "  Navigate Kindle to the [bold]cover page[/bold] of the book,\n"
-        "  then press [bold]Enter[/bold] to start.\n"
-        "\n"
-        "[bold]キャプチャの準備ができました。[/bold]\n"
-        "  Kindle で本の[bold]表紙ページ[/bold]を表示してから、\n"
-        "  [bold]Enter[/bold] を押してください。\n"
-    )
+    if manual_crop:
+        console.print(
+            "\n[bold]Manual crop mode.[/bold]\n"
+            "  Navigate Kindle to the [bold]cover page[/bold] of the book,\n"
+            "  then press [bold]Enter[/bold] to open the region selector.\n"
+            "\n"
+            "[bold]手動クロップモード。[/bold]\n"
+            "  Kindle で本の[bold]表紙ページ[/bold]を表示してから、\n"
+            "  [bold]Enter[/bold] を押して領域選択画面を開いてください。\n"
+        )
+    else:
+        console.print(
+            "\n[bold]Ready to capture.[/bold]\n"
+            "  Navigate Kindle to the [bold]cover page[/bold] of the book,\n"
+            "  then press [bold]Enter[/bold] to start.\n"
+            "\n"
+            "[bold]キャプチャの準備ができました。[/bold]\n"
+            "  Kindle で本の[bold]表紙ページ[/bold]を表示してから、\n"
+            "  [bold]Enter[/bold] を押してください。\n"
+        )
     click.pause(info="")
 
     try:
-        _run_capture(config, pages_to_retry=pages_to_retry, key_code=key_code)
+        manual_cover_region: ContentRegion | None = None
+        if manual_crop:
+            check_accessibility()
+            cover_window = find_kindle_window()
+            cover_frame = capture_window(cover_window)
+            try:
+                manual_cover_region = select_region(cover_frame)
+                log.info(
+                    "Manual cover region confirmed: x=%d y=%d w=%d h=%d",
+                    manual_cover_region.x,
+                    manual_cover_region.y,
+                    manual_cover_region.w,
+                    manual_cover_region.h,
+                )
+            except RegionSelectorCancelled:
+                console.print("[bold yellow]Cancelled.[/bold yellow] No region selected; exiting.")
+                sys.exit(1)
+
+        _run_capture(
+            config,
+            pages_to_retry=pages_to_retry,
+            key_code=key_code,
+            manual_cover_region=manual_cover_region,
+        )
     except (AccessibilityError, WindowCaptureError) as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}")
         log.debug("Fatal error", exc_info=True)
