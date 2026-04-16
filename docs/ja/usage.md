@@ -25,6 +25,7 @@ kpc --out output/my-book
 | `--ocr` | オフ | 生成した PDF に OCR を実行（`[ocr]` extra が必要 — [インストール](installation.md#ocr-付きでインストール)参照） |
 | `--ocr-lang LANG` | `jpn+eng` | Tesseract の言語指定 |
 | `--ocr-optimize N` | 1 | OCR 最適化レベル（0-3） |
+| `--manual-crop` | オフ | ドラッグ選択UIで表紙領域を手動指定（真っ白な表紙など自動検出が失敗する場合に使用） |
 | `--retry-failed` | オフ | `logs/failed_pages.json` のページのみ再キャプチャ |
 | `--debug` | オフ | デバッグログを有効化 |
 
@@ -63,6 +64,9 @@ kpc --out output/my-manga --direction left
 
 # OCR 付きでキャプチャ（日本語 + 英語）
 kpc --out output/my-book --ocr --ocr-lang jpn+eng
+
+# 真っ白な表紙の本をキャプチャ（表紙領域を手動指定）
+kpc --out output/my-book --manual-crop
 
 # デバッグログと生スクリーンショットを有効にしてキャプチャ
 kpc --out output/my-book --save-raw --debug

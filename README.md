@@ -13,6 +13,7 @@ Capture Kindle for Mac pages via screen recording and build a high-quality PDF (
 - Book-like PDF page sizing (300 DPI default)
 - Optional OCR text layer (Japanese + English)
 - End-of-book auto-detection (duplicate-frame streak)
+- Manual cover-region selection via `--manual-crop` (drag-to-select UI for books with all-white covers)
 
 ## Quick start
 
@@ -32,6 +33,9 @@ uv run kpc --out output/my-manga --direction left
 
 # Capture with OCR (requires --all-extras install above)
 uv run kpc --out output/my-book --ocr
+
+# Capture a book with an all-white cover (manual region selection)
+uv run kpc --out output/my-book --manual-crop
 
 # See all options
 uv run kpc --help
