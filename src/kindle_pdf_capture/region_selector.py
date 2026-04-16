@@ -493,10 +493,17 @@ class RegionSelector:
         self._close()
 
     def _close(self) -> None:
-        """Stop the event loop and destroy the window."""
+        """Stop the event loop and destroy the window.
+
+        quit() stops mainloop(); destroy() removes the window widget tree.
+        update() flushes any pending draw events so macOS removes the window
+        from the screen before we return to the caller.
+        """
         if hasattr(self, "_root"):
             with contextlib.suppress(Exception):
                 self._root.quit()
+            with contextlib.suppress(Exception):
+                self._root.update()
             with contextlib.suppress(Exception):
                 self._root.destroy()
 
