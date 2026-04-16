@@ -4,6 +4,20 @@ Displays a Kindle window screenshot scaled to fit the screen and lets
 the user drag a rectangle to define the capture area.  Pressing Enter
 confirms the selection; Escape cancels.
 
+Coordinate system
+-----------------
+tkinter operates in *logical points* (not physical pixels).  On Retina
+Macs one point = 2 physical pixels (backing_scale = 2.0).
+
+capture_window() returns a frame in *physical pixels*.
+
+So the pipeline is:
+  frame (physical px)
+    → PIL.resize to (disp_pts_w, disp_pts_h)   [logical points]
+    → displayed on Canvas (width=disp_pts_w pts)
+  drag events arrive in logical points
+    → multiply by pts_per_frame_px to get frame pixels
+
 Public API
 ----------
   select_region(frame) -> ContentRegion
@@ -15,7 +29,7 @@ Pure-logic helpers (also exported for testing)
 ----------------------------------------------
   _clamp(value, lo, hi)            -- integer clamping
   _normalise_rect(x0, y0, x1, y1) -- ensure top-left / bottom-right order
-  _rect_to_content_region(...)     -- pixel rect → ContentRegion
+  _rect_to_content_region(...)     -- pixel rect -> ContentRegion
 """
 
 from __future__ import annotations
@@ -61,24 +75,19 @@ def _rect_to_content_region(x0: int, y0: int, x1: int, y1: int) -> ContentRegion
 # ---------------------------------------------------------------------------
 
 
-def _get_screen_info() -> tuple[float, float, float]:
-    """Return (width_pts, height_pts, backing_scale) for the main screen.
+def _get_screen_pts() -> tuple[int, int]:
+    """Return (width, height) of the main screen in logical points.
 
-    Uses AppKit.NSScreen so the values are correct on Retina / HiDPI Macs
-    regardless of the display's logical vs. physical resolution.
-
-    Falls back to a safe default (2560x1600, scale=2.0) if AppKit is not
-    available (e.g. during tests on non-macOS).
+    Tries NSScreen first (reliable on macOS).  Falls back to a fixed
+    safe value so tests on non-macOS still work.
     """
     try:
         from AppKit import NSScreen  # type: ignore[import]
 
-        screen = NSScreen.mainScreen()
-        frame = screen.frame()
-        scale = screen.backingScaleFactor()
-        return float(frame.size.width), float(frame.size.height), float(scale)
+        f = NSScreen.mainScreen().frame()
+        return int(f.size.width), int(f.size.height)
     except Exception:
-        return 2560.0, 1600.0, 2.0
+        return 1280, 800
 
 
 # ---------------------------------------------------------------------------
@@ -87,90 +96,73 @@ def _get_screen_info() -> tuple[float, float, float]:
 
 _RECT_COLOUR = "#00d4ff"  # bright cyan selection box
 _RECT_WIDTH = 3
-_MASK_COLOUR = "#000000"  # semi-transparent dark overlay outside selection
-_MASK_STIPPLE = "gray50"  # tkinter stipple pattern (~50% opacity)
+_MASK_COLOUR = "#000000"  # dark overlay outside selection
+_MASK_STIPPLE = "gray50"  # ~50% opacity via tkinter stipple
 _FONT_FAMILY = "Helvetica"
 _FONT_SIZE = 15
-_INSTRUCTIONS_EN = "Drag to select the book area  •  Enter to confirm  •  Esc to cancel"
-_INSTRUCTIONS_JA = "本のページ領域をドラッグ選択  •  Enter で確定  •  Esc でキャンセル"
-# Margin reserved at the top for the instruction bar (logical pixels)
-_INSTR_BAR_H = 60
+_INSTRUCTIONS_EN = "Drag to select the book area  |  Enter: confirm  |  Esc: cancel"
+_INSTRUCTIONS_JA = "本のページ領域をドラッグ選択  |  Enter で確定  |  Esc でキャンセル"
+_INSTR_BAR_H = 60  # logical points reserved for instruction bar at top
 
 
 class RegionSelector:
-    """tkinter-based drag-to-select UI.
+    """tkinter drag-to-select UI.
 
-    The frame is scaled down to fit inside the usable screen area so that
-    Retina / HiDPI frames (e.g. 2560x1758 physical pixels) are displayed at
-    a sensible size.  All coordinates the user drags are in *display* pixels;
-    they are scaled back to *frame* pixels before returning the ContentRegion.
+    All internal geometry (canvas size, event coordinates, clamping) is in
+    *logical points*.  Coordinate conversion to frame pixels happens only in
+    _on_confirm, using self._pts_to_px (points -> frame pixel ratio).
 
     Parameters
     ----------
     frame : np.ndarray
-        BGR screenshot of the Kindle window (as returned by capture_window).
+        BGR screenshot of the Kindle window (capture_window output).
     title : str
-        Window title shown in the title bar.
+        Window title bar text.
     """
 
     def __init__(self, frame: np.ndarray, title: str = "Select capture region") -> None:
         self._frame_h, self._frame_w = frame.shape[:2]
         self._x0 = self._y0 = self._x1 = self._y1 = 0
         self._rect_id: int | None = None
-        # Four overlay rectangles (top, bottom, left, right) that darken the
-        # area outside the current selection.
         self._mask_ids: list[int] = []
         self._result: ContentRegion | None = None
         self._cancelled = False
 
-        # --- Tk root (must exist before PhotoImage) ---
+        # --- Tk root ---
         self._root = tk.Tk()
         self._root.title(title)
         self._root.resizable(False, False)
 
-        # --- Determine display scale ---
-        # Use NSScreen to get the main screen's logical point dimensions and
-        # backing scale factor.  This is reliable on Retina / HiDPI Macs where
-        # winfo_screenwidth() returns logical points but `frame` is in physical
-        # pixels (scale_factor = 2.0 on Retina).
-        screen_pts_w, screen_pts_h, backing_scale = _get_screen_info()
-        # frame pixels → logical screen points
-        frame_pts_w = self._frame_w / backing_scale
-        frame_pts_h = self._frame_h / backing_scale
+        # --- Compute display size in logical points ---
+        screen_w, screen_h = _get_screen_pts()
         # Reserve macOS menu bar (~25 pts) + instruction bar
-        usable_pts_h = screen_pts_h - 25 - _INSTR_BAR_H
-        # Scale factor to make the image fit in logical points, capped at 1.0
-        # so we never upscale a small frame.
-        fit_scale = min(screen_pts_w / frame_pts_w, usable_pts_h / frame_pts_h, 1.0)
-        self._scale = fit_scale * backing_scale  # maps display px → frame px
-        # Display dimensions in logical points (what tkinter uses for geometry)
-        disp_pts_w = max(1, int(frame_pts_w * fit_scale))
-        disp_pts_h = max(1, int(frame_pts_h * fit_scale))
-        # Display dimensions in pixels (what PIL resize needs)
-        self._disp_w = max(1, int(self._frame_w * fit_scale))
-        self._disp_h = max(1, int(self._frame_h * fit_scale))
+        usable_w = screen_w
+        usable_h = screen_h - 25 - _INSTR_BAR_H
+        # Fit the frame inside usable area (no upscaling)
+        scale = min(usable_w / self._frame_w, usable_h / self._frame_h, 1.0)
+        # Display dimensions in logical points (tkinter unit)
+        self._disp_w = max(1, int(self._frame_w * scale))
+        self._disp_h = max(1, int(self._frame_h * scale))
+        # pts_to_px: multiply logical-point drag coords by this to get frame px
+        self._pts_to_px = self._frame_w / self._disp_w  # == 1/scale
 
-        # --- Scale the image for display ---
+        # --- Resize image to display size (in logical points) ---
         from PIL import Image, ImageTk
 
         rgb = frame[:, :, ::-1].copy()
         pil_img = Image.fromarray(rgb)
-        if fit_scale < 1.0:
-            pil_img = pil_img.resize(
-                (self._disp_w, self._disp_h),
-                Image.LANCZOS,  # type: ignore[attr-defined]
-            )
+        pil_img = pil_img.resize((self._disp_w, self._disp_h), Image.LANCZOS)  # type: ignore[attr-defined]
         self._photo = ImageTk.PhotoImage(pil_img)
 
-        # Position window at top-left of screen, then bring to front
-        total_pts_h = _INSTR_BAR_H + disp_pts_h
-        self._root.geometry(f"{disp_pts_w}x{total_pts_h}+0+0")
+        # Canvas height = instruction bar + image
+        total_h = _INSTR_BAR_H + self._disp_h
+        self._img_y0 = _INSTR_BAR_H  # y offset of image top edge in canvas points
+
+        # --- Size and position the window ---
+        self._root.geometry(f"{self._disp_w}x{total_h}+0+0")
         self._root.attributes("-topmost", True)
         self._root.lift()
         self._root.focus_force()
-
-        # Total canvas height: instruction bar + image
-        total_h = _INSTR_BAR_H + self._disp_h
 
         # --- Canvas ---
         self._canvas = tk.Canvas(
@@ -181,7 +173,7 @@ class RegionSelector:
             highlightthickness=0,
             bg="#1a1a1a",
         )
-        self._canvas.pack()
+        self._canvas.pack(fill=tk.BOTH, expand=True)
 
         # Instruction bar background
         self._canvas.create_rectangle(
@@ -193,10 +185,11 @@ class RegionSelector:
             outline="",
         )
 
-        # Instruction texts with drop-shadow for legibility
+        # Instruction text with drop-shadow
+        cx = self._disp_w // 2
         for dx, dy in ((1, 1), (-1, -1), (1, -1), (-1, 1)):
             self._canvas.create_text(
-                self._disp_w // 2 + dx,
+                cx + dx,
                 16 + dy,
                 text=_INSTRUCTIONS_EN,
                 fill="#000000",
@@ -204,7 +197,7 @@ class RegionSelector:
                 anchor=tk.N,
             )
         self._canvas.create_text(
-            self._disp_w // 2,
+            cx,
             16,
             text=_INSTRUCTIONS_EN,
             fill="#ffffff",
@@ -213,7 +206,7 @@ class RegionSelector:
         )
         for dx, dy in ((1, 1), (-1, -1)):
             self._canvas.create_text(
-                self._disp_w // 2 + dx,
+                cx + dx,
                 40 + dy,
                 text=_INSTRUCTIONS_JA,
                 fill="#000000",
@@ -221,7 +214,7 @@ class RegionSelector:
                 anchor=tk.N,
             )
         self._canvas.create_text(
-            self._disp_w // 2,
+            cx,
             40,
             text=_INSTRUCTIONS_JA,
             fill="#cccccc",
@@ -229,11 +222,10 @@ class RegionSelector:
             anchor=tk.N,
         )
 
-        # Kindle screenshot below the instruction bar
-        self._img_y0 = _INSTR_BAR_H
+        # Kindle screenshot below instruction bar
         self._canvas.create_image(0, self._img_y0, anchor=tk.NW, image=self._photo)
 
-        # Event bindings (drag only within the image area)
+        # Bindings
         self._canvas.bind("<ButtonPress-1>", self._on_press)
         self._canvas.bind("<B1-Motion>", self._on_drag)
         self._root.bind("<Return>", self._on_confirm)
@@ -242,56 +234,54 @@ class RegionSelector:
         self._root.protocol("WM_DELETE_WINDOW", lambda: self._on_cancel(None))
 
     # ------------------------------------------------------------------
-    # Internal geometry helpers
+    # Clamping helpers (all in logical points)
     # ------------------------------------------------------------------
 
-    def _img_clamp_x(self, x: int) -> int:
+    def _cx(self, x: int) -> int:
         return _clamp(x, 0, self._disp_w)
 
-    def _img_clamp_y(self, y: int) -> int:
-        """Clamp to image area (below instruction bar)."""
+    def _cy(self, y: int) -> int:
         return _clamp(y, self._img_y0, self._img_y0 + self._disp_h)
 
+    # ------------------------------------------------------------------
+    # Overlay (dark mask outside selection)
+    # ------------------------------------------------------------------
+
     def _redraw_overlay(self, left: int, top: int, right: int, bottom: int) -> None:
-        """Redraw the four dark mask rectangles around the selection."""
         for mid in self._mask_ids:
             self._canvas.delete(mid)
         self._mask_ids = []
 
-        iw, ih = self._disp_w, self._disp_h
+        iw = self._disp_w
         iy = self._img_y0
+        ih = self._disp_h
 
         def _mask(x1: int, y1: int, x2: int, y2: int) -> None:
             if x2 > x1 and y2 > y1:
-                mid = self._canvas.create_rectangle(
-                    x1,
-                    y1,
-                    x2,
-                    y2,
-                    fill=_MASK_COLOUR,
-                    outline="",
-                    stipple=_MASK_STIPPLE,
+                self._mask_ids.append(
+                    self._canvas.create_rectangle(
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        fill=_MASK_COLOUR,
+                        outline="",
+                        stipple=_MASK_STIPPLE,
+                    )
                 )
-                self._mask_ids.append(mid)
 
-        # Top strip (between instruction bar and selection)
-        _mask(0, iy, iw, top)
-        # Bottom strip
-        _mask(0, bottom, iw, iy + ih)
-        # Left strip (between top and bottom of selection)
-        _mask(0, top, left, bottom)
-        # Right strip
-        _mask(right, top, iw, bottom)
+        _mask(0, iy, iw, top)  # above selection
+        _mask(0, bottom, iw, iy + ih)  # below selection
+        _mask(0, top, left, bottom)  # left of selection
+        _mask(right, top, iw, bottom)  # right of selection
 
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
 
     def _on_press(self, event: object) -> None:
-        x = event.x  # type: ignore[attr-defined]
-        y = self._img_clamp_y(event.y)  # type: ignore[attr-defined]
-        self._x0 = self._img_clamp_x(x)
-        self._y0 = y
+        self._x0 = self._cx(event.x)  # type: ignore[attr-defined]
+        self._y0 = self._cy(event.y)  # type: ignore[attr-defined]
         self._x1 = self._x0
         self._y1 = self._y0
         if self._rect_id is not None:
@@ -302,15 +292,10 @@ class RegionSelector:
         self._mask_ids = []
 
     def _on_drag(self, event: object) -> None:
-        self._x1 = self._img_clamp_x(event.x)  # type: ignore[attr-defined]
-        self._y1 = self._img_clamp_y(event.y)  # type: ignore[attr-defined]
-
+        self._x1 = self._cx(event.x)  # type: ignore[attr-defined]
+        self._y1 = self._cy(event.y)  # type: ignore[attr-defined]
         left, top, right, bottom = _normalise_rect(self._x0, self._y0, self._x1, self._y1)
-
-        # Redraw dark mask outside selection
         self._redraw_overlay(left, top, right, bottom)
-
-        # Redraw selection rectangle on top of mask
         if self._rect_id is not None:
             self._canvas.delete(self._rect_id)
         self._rect_id = self._canvas.create_rectangle(
@@ -329,19 +314,14 @@ class RegionSelector:
             if hasattr(self, "_root"):
                 self._root.quit()
             return
-        # Convert display pixel coordinates → frame pixel coordinates.
-        # self._scale = fit_scale * backing_scale,
-        # so frame_px = display_px * self._scale.
+        # Convert logical-point drag coords to frame pixel coords.
+        # pts_to_px = frame_w / disp_w  (how many frame pixels per display point)
+        p = self._pts_to_px
         iy = self._img_y0
-        fx0 = round(left * self._scale)
-        fy0 = round((top - iy) * self._scale)
-        fx1 = round(right * self._scale)
-        fy1 = round((bottom - iy) * self._scale)
-        # Clamp to frame bounds
-        fx0 = _clamp(fx0, 0, self._frame_w)
-        fy0 = _clamp(fy0, 0, self._frame_h)
-        fx1 = _clamp(fx1, 0, self._frame_w)
-        fy1 = _clamp(fy1, 0, self._frame_h)
+        fx0 = _clamp(round(left * p), 0, self._frame_w)
+        fy0 = _clamp(round((top - iy) * p), 0, self._frame_h)
+        fx1 = _clamp(round(right * p), 0, self._frame_w)
+        fy1 = _clamp(round((bottom - iy) * p), 0, self._frame_h)
         self._result = ContentRegion(x=fx0, y=fy0, w=fx1 - fx0, h=fy1 - fy0)
         if hasattr(self, "_root"):
             self._root.quit()
@@ -381,14 +361,12 @@ def select_region(frame: np.ndarray) -> ContentRegion:
     Parameters
     ----------
     frame : np.ndarray
-        BGR image to display as the selection backdrop (typically a
-        screenshot of the Kindle window at the cover page).
+        BGR image (physical pixels) from capture_window.
 
     Returns
     -------
     ContentRegion
-        The rectangle the user drew, in *frame* pixel coordinates
-        (not display/scaled coordinates).
+        Selected rectangle in *frame* pixel coordinates.
 
     Raises
     ------

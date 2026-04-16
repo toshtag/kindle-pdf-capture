@@ -129,8 +129,8 @@ class TestRegionSelectorLogic:
     def _init_selector(self, frame_w: int = 1200, frame_h: int = 900):
         """Create a RegionSelector via __new__ with all required attributes set.
 
-        Uses scale=1.0 (no downscaling) and _img_y0=_INSTR_BAR_H so that
-        display coords equal frame coords minus the instruction bar offset.
+        Uses disp == frame (pts_to_px=1.0) so that display point coords equal
+        frame pixel coords (no scaling).
         """
         from unittest.mock import MagicMock
 
@@ -144,8 +144,8 @@ class TestRegionSelectorLogic:
         selector._mask_ids = []
         selector._frame_w = frame_w
         selector._frame_h = frame_h
-        # scale=1.0: display pixels == frame pixels
-        selector._scale = 1.0
+        # pts_to_px=1.0: one display point == one frame pixel
+        selector._pts_to_px = 1.0
         selector._disp_w = frame_w
         selector._disp_h = frame_h
         selector._img_y0 = _INSTR_BAR_H
