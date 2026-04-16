@@ -353,6 +353,7 @@ def _run_capture(
                 )
                 status.update(f"[bold]Capturing[/bold] page {page_label} …")
 
+                pre_turn_frame = capture_window(window)
                 locked_crop_y = _capture_one_page(page_num, window, config, session, locked_crop_y)
 
                 send_page_turn_key(window.pid, key_code)
@@ -362,12 +363,12 @@ def _run_capture(
                         "Page %d: render timed out after %.1fs", page_num, wait_result.elapsed
                     )
 
-                next_frame = (
+                post_turn_frame = (
                     wait_result.last_frame
                     if wait_result.last_frame is not None
                     else capture_window(window)
                 )
-                session.record_duplicate(next_frame)
+                session.record_duplicate(pre_turn_frame, post_turn_frame)
 
                 page_num += 1
 
