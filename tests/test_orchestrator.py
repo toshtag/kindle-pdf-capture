@@ -70,6 +70,24 @@ def _vertical_text_bgr(col_positions: list[int], gray_bg: int = 200) -> np.ndarr
     return img
 
 
+def _sparse_center_text_bgr(
+    text_blocks: list[tuple[int, int, int, int]], bg: int = 220
+) -> np.ndarray:
+    """Gray background with a tiny amount of dark text near the centre.
+
+    Simulates title/half-title/credits pages where text covers less than 1% of
+    the frame. Two such pages differ in which pixels are dark, but the mean
+    absolute difference (MAD) stays near zero because most pixels are identical
+    gray background. This is the case that defeated the 64x64 MAD approach.
+
+    Each tuple is (y0, y1, x0, x1).
+    """
+    img = np.full((900, 1200, 3), bg, dtype=np.uint8)
+    for y0, y1, x0, x1 in text_blocks:
+        img[y0:y1, x0:x1] = 40
+    return img
+
+
 def _config(tmp_path: Path, **overrides) -> CaptureConfig:
     defaults = dict(
         out_dir=tmp_path / "book",
@@ -252,6 +270,44 @@ class TestCaptureSessionEndDetection:
             session.record_duplicate(pages[i], pages[i + 1])
         # 3 calls (limit=3), each with genuinely different before/after —
         # streak must reset each time so is_finished() stays False
+        assert session.is_finished() is False
+
+    def test_sparse_center_text_pages_not_mistaken_for_duplicate(self, tmp_path: Path) -> None:
+        """Title/half-title/credits pages with <1% text area must not trigger end-of-book.
+
+        These pages have a nearly uniform gray background; only a handful of
+        pixels differ between consecutive pages.  MAD (mean absolute difference)
+        stays near zero because almost every pixel is the same gray.  The
+        detector must instead count the *number* of changed pixels rather than
+        their average magnitude.
+
+        Real-world numbers (raw_0002 vs raw_0003, 夢をかなえるゾウ1):
+          MAD at 64x64:  0.00137  — well below any sane threshold
+          changed pixels (>10): 0.53% of total area — detectable with ratio
+        """
+        session = CaptureSession(_config(tmp_path))
+        # Replicate actual numbers from raw_0002 vs raw_0003 (夢をかなえるゾウ1):
+        #   frame size: 2358x1644, changed pixels (>10): ~0.44% of total area
+        #   MAD at 64x64: 0.00137 — all downscale-based approaches return "same"
+        # Use a 1644x2358 gray canvas and place tiny non-overlapping text blocks
+        # so that changed pixels stay under 0.5% of total area.
+        H, W = 2358, 1644
+        bg = 220
+
+        def make_page(blocks):
+            img = np.full((H, W, 3), bg, dtype=np.uint8)
+            for y0, y1, x0, x1 in blocks:
+                img[y0:y1, x0:x1] = 40
+            return img
+
+        # Each page has ~0.44% changed area vs the others — matching real data
+        page_a = make_page([(900, 1100, 580, 630), (1000, 1200, 510, 560), (1300, 1380, 545, 580)])
+        page_b = make_page([(200, 500, 565, 615)])
+        page_c = make_page([(1100, 1380, 545, 580), (1100, 1380, 590, 625)])
+
+        pages = [page_a, page_b, page_c, page_a]  # 3 transitions
+        for i in range(3):
+            session.record_duplicate(pages[i], pages[i + 1])
         assert session.is_finished() is False
 
     def test_ok_result_does_not_reset_duplicate_streak(self, tmp_path: Path) -> None:
