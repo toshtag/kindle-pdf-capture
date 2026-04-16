@@ -25,6 +25,7 @@ You have `--start-delay` seconds (default 3) to switch focus to Kindle before ca
 | `--ocr` | off | Run OCR on the assembled PDF (requires the `[ocr]` extra — see [installation](installation.md#install-with-ocr-support)) |
 | `--ocr-lang LANG` | `jpn+eng` | Tesseract language string |
 | `--ocr-optimize N` | 1 | OCR optimization level 0-3 |
+| `--manual-crop` | off | Manually select the cover region via drag-to-select UI instead of auto-detection (useful when the cover is all-white) |
 | `--retry-failed` | off | Re-capture pages from `logs/failed_pages.json` |
 | `--debug` | off | Enable debug logging |
 
@@ -63,6 +64,9 @@ kpc --out output/my-manga --direction left
 
 # Capture with OCR (Japanese + English)
 kpc --out output/my-book --ocr --ocr-lang jpn+eng
+
+# Capture a book with an all-white cover (manual region selection)
+kpc --out output/my-book --manual-crop
 
 # Capture with extra logging and save raw screenshots
 kpc --out output/my-book --save-raw --debug
