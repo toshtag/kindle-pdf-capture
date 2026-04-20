@@ -11,7 +11,7 @@ Capture Kindle for Mac pages via screen recording and build a high-quality PDF (
 - Smart page-turn detection (frame-diff polling, no fixed sleep)
 - LTR and RTL (manga) support via `--direction`
 - Book-like PDF page sizing (300 DPI default)
-- Optional OCR text layer (Japanese + English)
+- Optional OCR text layer via Tesseract (for non-macOS viewers; macOS Live Text works without it)
 - End-of-book auto-detection (duplicate-frame streak)
 - Manual cover-region selection via `--manual-crop` (drag-to-select UI for books with all-white covers)
 

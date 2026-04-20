@@ -22,7 +22,7 @@ kpc --out output/my-book
 | `--start-delay N` | 3 | キャプチャ開始までの待機時間（秒） |
 | `--direction DIR` | `right` | ページ送り方向: LTR は `right`、RTL（マンガ等）は `left` |
 | `--pdf-dpi N` | 300 | PDF ページサイズの DPI（300 で 1800 px = 6 インチ幅） |
-| `--ocr` | オフ | 生成した PDF に OCR を実行（`[ocr]` extra が必要 — [インストール](installation.md#ocr-付きでインストール)参照） |
+| `--ocr` | オフ | PDF に Tesseract テキストレイヤーを埋め込む（`[ocr]` extra が必要 — [インストール](installation.md#ocr-付きでインストール)参照。下記の注記も参照） |
 | `--ocr-lang LANG` | `jpn+eng` | Tesseract の言語指定 |
 | `--ocr-optimize N` | 1 | OCR 最適化レベル（0-3） |
 | `--manual-crop` | オフ | ドラッグ選択UIで表紙領域を手動指定（真っ白な表紙など自動検出が失敗する場合に使用） |
@@ -42,6 +42,19 @@ output/my-book/
     metadata.json   # 実行サマリ
     failed_pages.json
 ```
+
+## OCR と macOS Live Text
+
+**このツールは macOS 専用であり、ほとんどの場合 `--ocr` は不要です。**
+
+`book.pdf` はテキストデータを一切含まない JPEG 画像の集合体です。しかし macOS の Preview などの PDF ビューアは Apple の Live Text エンジンを使って画面上の文字をリアルタイムに認識するため、追加作業なしでテキスト選択・コピー・右クリック検索が可能です。Apple の日本語認識精度は Tesseract より概して高いです。
+
+`--ocr` を使うと、Tesseract が生成したテキストレイヤーが `book_ocr.pdf` に直接埋め込まれます。PDF ビューアは Live Text の代わりにその埋め込みレイヤーを使用するため、Tesseract の文字位置が実際のグリフ位置からずれていると、テキスト選択がずれたり誤った文字が選ばれたりすることがあります。
+
+**`--ocr` が有効な場面:**
+
+- Windows・Linux・Live Text 非対応の古い macOS でも PDF を検索可能にしたい場合
+- 全文インデクサやスクリーンリーダーなど、独自 OCR を持たず埋め込みテキストを読むツールに PDF を渡す場合
 
 ## 失敗ページの再試行
 
