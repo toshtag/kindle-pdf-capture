@@ -100,10 +100,12 @@ class TestRunOcrSuccess:
 
         mock_mod.ocr.assert_called_once()
         kwargs = mock_mod.ocr.call_args.kwargs
-        assert kwargs["language"] == ["jpn", "eng"]
+        assert set(kwargs["language"]) == {"jpn", "jpn_vert", "eng"}
         assert kwargs["optimize"] == 2
         assert kwargs["skip_text"] is True
         assert kwargs["progress_bar"] is True
+        assert kwargs["tesseract_pagesegmode"] == 1
+        assert kwargs["tesseract_oem"] == 1
 
     def test_lang_parameter_passed(self, tmp_path: Path) -> None:
         src = tmp_path / "book.pdf"
