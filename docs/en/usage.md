@@ -22,7 +22,7 @@ You have `--start-delay` seconds (default 3) to switch focus to Kindle before ca
 | `--start-delay N` | 3 | Seconds before capture starts |
 | `--direction DIR` | `right` | Page-advance direction: `right` for LTR, `left` for RTL (manga) |
 | `--pdf-dpi N` | 300 | DPI for PDF page sizing (300 maps 1800 px to 6 inches) |
-| `--ocr` | off | Run OCR on the assembled PDF (requires the `[ocr]` extra — see [installation](installation.md#install-with-ocr-support)) |
+| `--ocr` | off | Embed a Tesseract text layer in the PDF (requires the `[ocr]` extra — see [installation](installation.md#install-with-ocr-support) and the note below) |
 | `--ocr-lang LANG` | `jpn+eng` | Tesseract language string |
 | `--ocr-optimize N` | 1 | OCR optimization level 0-3 |
 | `--manual-crop` | off | Manually select the cover region via drag-to-select UI instead of auto-detection (useful when the cover is all-white) |
@@ -42,6 +42,28 @@ output/my-book/
     metadata.json   # run summary
     failed_pages.json
 ```
+
+## OCR and macOS Live Text
+
+**On macOS (the only supported platform), you likely do not need `--ocr`.**
+
+`book.pdf` contains no text data — it is a sequence of JPEG images. However,
+macOS Preview and other PDF viewers use Apple's built-in Live Text engine to
+recognise characters on the fly. This gives you accurate text selection, copy,
+and right-click search without any extra step, and Apple's Japanese recognition
+quality is generally higher than Tesseract's.
+
+`--ocr` embeds a Tesseract-generated text layer directly into `book_ocr.pdf`.
+The viewer then uses that embedded layer instead of Live Text. If Tesseract's
+character positions differ slightly from the actual glyph positions, text
+selection will appear to drift or select the wrong characters.
+
+**When `--ocr` is useful:**
+
+- You need the PDF to be searchable on Windows, Linux, or older macOS versions
+  where Live Text is unavailable.
+- You are passing the PDF to a tool (full-text indexer, screen reader, etc.)
+  that reads embedded text rather than running its own OCR.
 
 ## Retrying failed pages
 
