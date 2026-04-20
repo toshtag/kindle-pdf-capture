@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-04-20
+
+### Fixed
+
+- Japanese OCR no longer produces garbled output (repeated characters such as
+  `万` or `の`). Three fixes applied to the Tesseract invocation inside
+  `run_ocr`:
+  - `jpn_vert` is now automatically added to the language list whenever `jpn`
+    is specified. Without it, Tesseract LSTM cannot detect vertical column
+    direction and misreads vertical text as a single long horizontal line.
+  - `tesseract_pagesegmode=1` (automatic segmentation with OSD) lets Tesseract
+    determine the reading orientation per page rather than assuming horizontal.
+  - `tesseract_oem=1` (LSTM only) prevents fallback to the legacy Tesseract
+    engine, which has poor Japanese support.
+
 ## [1.4.0] - 2026-04-16
 
 ### Added
@@ -302,7 +317,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bilingual documentation (English and Japanese)
 - GitHub PR/issue templates, Dependabot, and security policy
 
-[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/toshtag/kindle-pdf-capture/compare/v1.3.1...v1.3.2
