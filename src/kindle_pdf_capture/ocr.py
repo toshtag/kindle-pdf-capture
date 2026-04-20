@@ -104,6 +104,15 @@ def run_ocr(
             _log.setLevel(logging.ERROR)
         _ocrmypdf_loggers_silenced = True
 
+    # Determine if the language set contains a Japanese variant so we can
+    # add the vertical counterpart automatically.  Kindle books are often
+    # vertical-layout; without jpn_vert Tesseract LSTM misreads the column
+    # direction and produces garbage (repeated single characters like 万/の).
+    lang_codes = set(languages)
+    if "jpn" in lang_codes and "jpn_vert" not in lang_codes:
+        lang_codes.add("jpn_vert")
+    languages = list(lang_codes)
+
     try:
         exit_code = _ocrmypdf.ocr(
             src,
@@ -112,6 +121,16 @@ def run_ocr(
             skip_text=True,
             optimize=optimize,
             progress_bar=True,
+            # PSM 1: automatic page segmentation with OSD — lets Tesseract
+            # detect text orientation (horizontal vs vertical) per page rather
+            # than assuming a fixed direction.  Without this, LSTM often
+            # misidentifies vertical Japanese columns as a single long
+            # horizontal line and outputs repeated characters.
+            tesseract_pagesegmode=1,
+            # OEM 1: LSTM engine only.  The legacy engine (OEM 0) has poor
+            # Japanese support; OEM 2/3 fall back to it when LSTM is uncertain,
+            # which is counterproductive here.
+            tesseract_oem=1,
         )
     except Exception as exc:
         logger.error("ocrmypdf raised an exception: %s", exc)
